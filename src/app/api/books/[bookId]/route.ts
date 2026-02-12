@@ -1,25 +1,21 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ bookId: string }> }
-) {
+export async function GET(_request: Request, { params }: { params: Promise<{ bookId: string }> }) {
   const { bookId } = await params;
-  const db = getDb();
+  const supabase = await createServerSupabaseClient();
 
-  const book = db.prepare("SELECT * FROM books WHERE id = ? OR slug = ?").get(bookId, bookId);
-  if (!book) {
-    return NextResponse.json({ error: "Book not found" }, { status: 404 });
-  }
+  const { data: book, error } = await supabase
+    .from("books")
+    .select("*, chapters(*)")
+    .or(`id.eq.${bookId},slug.eq.${bookId}`)
+    .single();
 
-  const chapters = db
-    .prepare(
-      `SELECT c.*,
-        (SELECT COUNT(*) FROM concepts WHERE chapter_id = c.id) as concept_count
-       FROM chapters c WHERE c.book_id = ? ORDER BY c.number`
-    )
-    .all((book as { id: number }).id);
+  if (error || !book) return NextResponse.json({ error: "Book not found" }, { status: 404 });
 
-  return NextResponse.json({ ...book, chapters });
+  return NextResponse.json({
+    ...book,
+    chapters: book.chapters?.sort((a: { number: number }, b: { number: number }) => a.number - b.number) ?? [],
+    chapter_count: book.chapters?.length ?? 0,
+  });
 }

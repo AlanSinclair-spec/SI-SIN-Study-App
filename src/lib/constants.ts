@@ -5,6 +5,7 @@ export const NAV_ITEMS = [
   { href: "/knowledge", label: "Knowledge Base", icon: "BookOpen" },
   { href: "/flashcards", label: "Flashcards", icon: "Layers" },
   { href: "/quiz", label: "Quiz", icon: "HelpCircle" },
+  { href: "/notes", label: "Notes", icon: "FileText" },
   { href: "/connections", label: "Connections", icon: "Link" },
   { href: "/tutor", label: "AI Tutor", icon: "MessageSquare" },
   { href: "/daily", label: "Daily Session", icon: "Zap" },

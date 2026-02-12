@@ -5,7 +5,7 @@ import Link from "next/link";
 import { BookOpen, ChevronRight } from "lucide-react";
 
 interface BookWithCount {
-  id: number;
+  id: string;
   title: string;
   author: string;
   slug: string;
@@ -20,7 +20,8 @@ export default function KnowledgePage() {
   useEffect(() => {
     fetch("/api/books")
       .then((r) => r.json())
-      .then(setBooks);
+      .then(setBooks)
+      .catch(() => {});
   }, []);
 
   return (

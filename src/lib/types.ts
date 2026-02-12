@@ -1,14 +1,16 @@
-// Database entity types
+// Database entity types — all IDs are UUIDs (strings)
 
 export interface User {
-  id: number;
-  name: string;
+  id: string;
+  email: string;
+  display_name: string;
   avatar_url: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface Book {
-  id: number;
+  id: string;
   title: string;
   author: string;
   slug: string;
@@ -19,8 +21,8 @@ export interface Book {
 }
 
 export interface Chapter {
-  id: number;
-  book_id: number;
+  id: string;
+  book_id: string;
   number: number;
   title: string;
   slug: string;
@@ -30,8 +32,8 @@ export interface Chapter {
 }
 
 export interface Concept {
-  id: number;
-  chapter_id: number;
+  id: string;
+  chapter_id: string;
   title: string;
   description: string;
   importance: "core" | "supporting" | "supplementary";
@@ -39,17 +41,17 @@ export interface Concept {
 }
 
 export interface Argument {
-  id: number;
-  concept_id: number;
+  id: string;
+  concept_id: string;
   title: string;
   description: string;
   created_at: string;
 }
 
 export interface Quote {
-  id: number;
-  chapter_id: number;
-  concept_id: number | null;
+  id: string;
+  chapter_id: string;
+  concept_id: string | null;
   text: string;
   page_ref: string | null;
   context: string | null;
@@ -57,10 +59,10 @@ export interface Quote {
 }
 
 export interface Flashcard {
-  id: number;
-  book_id: number;
-  chapter_id: number | null;
-  concept_id: number | null;
+  id: string;
+  book_id: string;
+  chapter_id: string | null;
+  concept_id: string | null;
   front: string;
   back: string;
   difficulty: "beginner" | "intermediate" | "advanced";
@@ -69,9 +71,9 @@ export interface Flashcard {
 }
 
 export interface FlashcardReview {
-  id: number;
-  user_id: number;
-  flashcard_id: number;
+  id: string;
+  user_id: string;
+  flashcard_id: string;
   quality: number;
   easiness_factor: number;
   interval_days: number;
@@ -81,8 +83,8 @@ export interface FlashcardReview {
 }
 
 export interface UserFlashcardState {
-  user_id: number;
-  flashcard_id: number;
+  user_id: string;
+  flashcard_id: string;
   easiness_factor: number;
   interval_days: number;
   repetitions: number;
@@ -92,10 +94,10 @@ export interface UserFlashcardState {
 }
 
 export interface QuizQuestion {
-  id: number;
-  book_id: number | null;
-  chapter_id: number | null;
-  concept_id: number | null;
+  id: string;
+  book_id: string | null;
+  chapter_id: string | null;
+  concept_id: string | null;
   question_type: "multiple_choice" | "short_answer";
   question_text: string;
   correct_answer: string;
@@ -108,31 +110,75 @@ export interface QuizQuestion {
   created_at: string;
 }
 
-export interface Quiz {
-  id: number;
-  user_id: number;
-  book_id: number | null;
-  chapter_id: number | null;
-  quiz_type: "multiple_choice" | "short_answer" | "mixed" | "cross_book";
-  score: number | null;
+export interface QuizResult {
+  id: string;
+  user_id: string;
+  book: string;
+  chapter: number | null;
+  score: number;
   total_questions: number;
-  correct_count: number;
-  started_at: string;
-  completed_at: string | null;
+  answers: QuizResultAnswer[];
+  completed_at: string;
 }
 
-export interface QuizAnswer {
-  id: number;
-  quiz_id: number;
-  question_id: number;
+export interface QuizResultAnswer {
+  question_id: string;
+  question_text: string;
   user_answer: string;
-  is_correct: number;
-  answered_at: string;
+  correct_answer: string;
+  is_correct: boolean;
+  explanation: string | null;
+}
+
+export interface StudyProgress {
+  id: string;
+  user_id: string;
+  book: string;
+  chapter: number;
+  section: string | null;
+  status: "not_started" | "in_progress" | "completed";
+  completion_percentage: number;
+  last_studied_at: string | null;
+  created_at: string;
+}
+
+export interface Note {
+  id: string;
+  user_id: string;
+  book: string;
+  chapter: number;
+  section: string | null;
+  content: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Highlight {
+  id: string;
+  user_id: string;
+  book: string;
+  chapter: number;
+  highlighted_text: string;
+  note: string | null;
+  color: string;
+  created_at: string;
+}
+
+export interface CrossReference {
+  id: string;
+  user_id: string;
+  source_book: string;
+  source_chapter: number;
+  target_book: string;
+  target_chapter: number;
+  connection_note: string;
+  created_at: string;
 }
 
 export interface StudySession {
-  id: number;
-  user_id: number;
+  id: string;
+  user_id: string;
   session_type: "daily" | "flashcard" | "quiz" | "tutor" | "browse";
   flashcards_reviewed: number;
   quiz_score: number | null;
@@ -142,11 +188,11 @@ export interface StudySession {
 }
 
 export interface Connection {
-  id: number;
+  id: string;
   title: string;
   description: string;
-  sin_concept_id: number | null;
-  si_concept_id: number | null;
+  sin_concept_id: string | null;
+  si_concept_id: string | null;
   sin_theme: string;
   si_theme: string;
   relationship: "parallel" | "contrast" | "complement" | "tension";
@@ -155,8 +201,8 @@ export interface Connection {
 }
 
 export interface TutorConversation {
-  id: number;
-  user_id: number;
+  id: string;
+  user_id: string;
   difficulty: "beginner" | "intermediate" | "advanced";
   topic: string | null;
   messages: string;
@@ -184,6 +230,7 @@ export interface ConceptWithArguments extends Concept {
 
 export interface FlashcardWithState extends Flashcard {
   book_title: string;
+  chapter_title?: string;
   state: UserFlashcardState | null;
 }
 
@@ -193,19 +240,32 @@ export interface QuizQuestionWithAnswer extends QuizQuestion {
 }
 
 export interface UserStats {
-  user_id: number;
+  user_id: string;
   user_name: string;
   total_flashcards_reviewed: number;
+  unique_cards_reviewed: number;
   flashcard_accuracy: number;
   total_quizzes_taken: number;
   avg_quiz_score: number;
+  best_quiz_score: number;
   study_streak: number;
   chapters_studied: number;
   total_study_sessions: number;
+  total_notes: number;
 }
 
 export interface TutorMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+}
+
+export interface LeaderboardEntry {
+  user_id: string;
+  user_name: string;
+  flashcards_reviewed: number;
+  flashcard_accuracy: number;
+  quizzes_taken: number;
+  avg_quiz_score: number;
+  study_sessions: number;
 }

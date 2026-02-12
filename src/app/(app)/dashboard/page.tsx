@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useUser } from "@/contexts/user-context";
+import { useAuth } from "@/contexts/auth-context";
 import Link from "next/link";
 import {
   Zap,
@@ -12,6 +12,7 @@ import {
   Trophy,
   BookOpen,
   TrendingUp,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,9 +27,10 @@ interface Stats {
   study_streak: number;
   chapters_studied: number;
   total_study_sessions: number;
+  total_notes: number;
   weak_concepts: Array<{
     title: string;
-    id: number;
+    id: string;
     miss_count: number;
     chapter_title: string;
     book_title: string;
@@ -36,7 +38,7 @@ interface Stats {
 }
 
 interface LeaderboardEntry {
-  user_id: number;
+  user_id: string;
   user_name: string;
   composite_score: number;
   total_reviews: number;
@@ -46,26 +48,47 @@ interface LeaderboardEntry {
 }
 
 export default function DashboardPage() {
-  const { currentUser } = useUser();
+  const { user, profile, isLoading } = useAuth();
   const [stats, setStats] = useState<Stats | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 
   useEffect(() => {
-    if (!currentUser) return;
-    fetch(`/api/stats?userId=${currentUser.id}`)
+    if (!user) return;
+    fetch("/api/stats")
       .then((r) => r.json())
-      .then(setStats);
+      .then(setStats)
+      .catch(() => {});
     fetch("/api/stats/leaderboard")
       .then((r) => r.json())
-      .then(setLeaderboard);
-  }, [currentUser]);
+      .then(setLeaderboard)
+      .catch(() => {});
+  }, [user]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-64 bg-muted rounded animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-24 bg-muted rounded-lg animate-pulse" />
+          ))}
+        </div>
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="h-48 bg-muted rounded-lg animate-pulse" />
+          <div className="h-48 bg-muted rounded-lg animate-pulse" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">
-            {stats ? `Welcome back, ${stats.user_name}` : "Dashboard"}
+            {profile
+              ? `Welcome back, ${profile.display_name}`
+              : "Dashboard"}
           </h1>
           <p className="text-muted-foreground mt-0.5">Track your study progress.</p>
         </div>
@@ -79,7 +102,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-2 text-muted-foreground mb-2">
             <Flame className="w-4 h-4 text-orange-400" />
@@ -118,6 +141,15 @@ export default function DashboardPage() {
           </div>
           <p className="text-2xl font-bold">{stats?.chapters_studied || 0}</p>
           <p className="text-xs text-muted-foreground">of 19 studied</p>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground mb-2">
+            <FileText className="w-4 h-4 text-cyan-400" />
+            <span className="text-xs font-medium">Notes</span>
+          </div>
+          <p className="text-2xl font-bold">{stats?.total_notes || 0}</p>
+          <p className="text-xs text-muted-foreground">created</p>
         </div>
       </div>
 
@@ -167,7 +199,7 @@ export default function DashboardPage() {
                   key={entry.user_id}
                   className={cn(
                     "flex items-center gap-3 p-2 rounded-md",
-                    currentUser?.id === entry.user_id && "bg-accent/50"
+                    user?.id === entry.user_id && "bg-accent/50"
                   )}
                 >
                   <span

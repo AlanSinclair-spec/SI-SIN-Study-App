@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
 
 export async function GET() {
-  const db = getDb();
-  const connections = db
-    .prepare("SELECT * FROM connections ORDER BY id")
-    .all();
-  return NextResponse.json(connections);
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("connections")
+    .select("*")
+    .order("created_at");
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json(data ?? []);
 }

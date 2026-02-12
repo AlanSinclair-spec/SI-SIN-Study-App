@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ArrowLeft, ChevronRight, BookOpen } from "lucide-react";
 
 interface Chapter {
-  id: number;
+  id: string;
   number: number;
   title: string;
   slug: string;
@@ -15,7 +15,7 @@ interface Chapter {
 }
 
 interface BookData {
-  id: number;
+  id: string;
   title: string;
   author: string;
   slug: string;
@@ -30,7 +30,8 @@ export default function BookDetailPage() {
   useEffect(() => {
     fetch(`/api/books/${params.bookSlug}`)
       .then((r) => r.json())
-      .then(setBook);
+      .then(setBook)
+      .catch(() => {});
   }, [params.bookSlug]);
 
   if (!book) {

@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 interface TutorContext {
   difficulty: "beginner" | "intermediate" | "advanced";
@@ -54,64 +54,49 @@ CONVERSATION GUIDELINES:
 8. Use markdown for emphasis and structure when helpful`;
 }
 
-export function loadBookContext(topic?: string): string {
-  const db = getDb();
-
+export async function loadBookContext(
+  supabase: SupabaseClient,
+  topic?: string
+): Promise<string> {
   if (!topic) {
-    // Load a general overview
-    const concepts = db
-      .prepare(
-        `SELECT c.title, c.description, ch.title as chapter_title, b.title as book_title
-         FROM concepts c
-         JOIN chapters ch ON c.chapter_id = ch.id
-         JOIN books b ON ch.book_id = b.id
-         WHERE c.importance = 'core'
-         ORDER BY b.id, ch.number
-         LIMIT 30`
-      )
-      .all() as Array<{
-      title: string;
-      description: string;
-      chapter_title: string;
-      book_title: string;
-    }>;
+    // Load a general overview of core concepts
+    const { data: concepts } = await supabase
+      .from("concepts")
+      .select("title, description, chapters(title, books(title))")
+      .eq("importance", "core")
+      .limit(30);
+
+    if (!concepts || concepts.length === 0) return "";
 
     return concepts
-      .map(
-        (c) =>
-          `[${c.book_title} — ${c.chapter_title}] ${c.title}: ${c.description}`
-      )
+      .map((c) => {
+        const ch = c.chapters as unknown as { title: string; books: { title: string } | null } | null;
+        const chapterTitle = ch?.title ?? "Unknown Chapter";
+        const bookTitle = ch?.books?.title ?? "Unknown Book";
+        return `[${bookTitle} — ${chapterTitle}] ${c.title}: ${c.description}`;
+      })
       .join("\n\n");
   }
 
   // Search for relevant concepts based on topic
-  const searchTerm = `%${topic}%`;
-  const concepts = db
-    .prepare(
-      `SELECT c.title, c.description, ch.title as chapter_title, b.title as book_title
-       FROM concepts c
-       JOIN chapters ch ON c.chapter_id = ch.id
-       JOIN books b ON ch.book_id = b.id
-       WHERE c.title LIKE ? OR c.description LIKE ?
-       ORDER BY c.importance = 'core' DESC
-       LIMIT 15`
-    )
-    .all(searchTerm, searchTerm) as Array<{
-    title: string;
-    description: string;
-    chapter_title: string;
-    book_title: string;
-  }>;
+  const pattern = `%${topic}%`;
+  const { data: concepts } = await supabase
+    .from("concepts")
+    .select("title, description, chapters(title, books(title))")
+    .or(`title.ilike.${pattern},description.ilike.${pattern}`)
+    .limit(15);
 
-  if (concepts.length === 0) {
-    return loadBookContext(); // Fall back to general overview
+  if (!concepts || concepts.length === 0) {
+    return loadBookContext(supabase); // Fall back to general overview
   }
 
   return concepts
-    .map(
-      (c) =>
-        `[${c.book_title} — ${c.chapter_title}] ${c.title}: ${c.description}`
-    )
+    .map((c) => {
+      const ch = c.chapters as unknown as { title: string; books: { title: string } | null } | null;
+      const chapterTitle = ch?.title ?? "Unknown Chapter";
+      const bookTitle = ch?.books?.title ?? "Unknown Book";
+      return `[${bookTitle} — ${chapterTitle}] ${c.title}: ${c.description}`;
+    })
     .join("\n\n");
 }
 

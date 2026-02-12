@@ -1,38 +1,32 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { calculateSM2, DEFAULT_SM2_STATE } from "@/lib/sm2";
 
 export async function POST(request: Request) {
-  const { userId, flashcardId, quality } = await request.json();
+  const supabase = await createServerSupabaseClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  if (!userId || !flashcardId || quality === undefined) {
-    return NextResponse.json(
-      { error: "userId, flashcardId, and quality are required" },
-      { status: 400 }
-    );
+  const body = await request.json();
+  const { flashcardId, quality } = body as { flashcardId: string; quality: number };
+
+  if (!flashcardId || quality === undefined) {
+    return NextResponse.json({ error: "flashcardId and quality required" }, { status: 400 });
   }
 
   if (quality < 0 || quality > 5) {
-    return NextResponse.json(
-      { error: "Quality must be between 0 and 5" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Quality must be between 0 and 5" }, { status: 400 });
   }
 
-  const db = getDb();
+  // Get current state
+  const { data: currentState } = await supabase
+    .from("user_flashcard_state")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("flashcard_id", flashcardId)
+    .maybeSingle();
 
-  // Get current state or use defaults
-  const currentState = db
-    .prepare(
-      "SELECT easiness_factor, interval_days, repetitions FROM user_flashcard_state WHERE user_id = ? AND flashcard_id = ?"
-    )
-    .get(Number(userId), Number(flashcardId)) as {
-    easiness_factor: number;
-    interval_days: number;
-    repetitions: number;
-  } | undefined;
-
-  const sm2Input = currentState
+  const state = currentState
     ? {
         easinessFactor: currentState.easiness_factor,
         intervalDays: currentState.interval_days,
@@ -40,45 +34,45 @@ export async function POST(request: Request) {
       }
     : DEFAULT_SM2_STATE;
 
-  const result = calculateSM2(quality, sm2Input);
+  const newState = calculateSM2(quality, state);
 
-  // Upsert user_flashcard_state
-  db.prepare(
-    `INSERT INTO user_flashcard_state (user_id, flashcard_id, easiness_factor, interval_days, repetitions, next_review, last_quality, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(user_id, flashcard_id)
-     DO UPDATE SET easiness_factor = ?, interval_days = ?, repetitions = ?, next_review = ?, last_quality = ?, updated_at = datetime('now')`
-  ).run(
-    Number(userId),
-    Number(flashcardId),
-    result.easinessFactor,
-    result.intervalDays,
-    result.repetitions,
-    result.nextReview,
-    quality,
-    result.easinessFactor,
-    result.intervalDays,
-    result.repetitions,
-    result.nextReview,
-    quality
+  // Upsert flashcard state
+  const { error: upsertError } = await supabase.from("user_flashcard_state").upsert(
+    {
+      user_id: user.id,
+      flashcard_id: flashcardId,
+      easiness_factor: newState.easinessFactor,
+      interval_days: newState.intervalDays,
+      repetitions: newState.repetitions,
+      next_review: newState.nextReview,
+      last_quality: quality,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id,flashcard_id" }
   );
 
-  // Insert review audit log
-  db.prepare(
-    `INSERT INTO flashcard_reviews (user_id, flashcard_id, quality, easiness_factor, interval_days, repetitions, next_review)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    Number(userId),
-    Number(flashcardId),
+  if (upsertError) {
+    return NextResponse.json({ error: upsertError.message }, { status: 500 });
+  }
+
+  // Record review
+  const { error: reviewError } = await supabase.from("flashcard_reviews").insert({
+    user_id: user.id,
+    flashcard_id: flashcardId,
     quality,
-    result.easinessFactor,
-    result.intervalDays,
-    result.repetitions,
-    result.nextReview
-  );
+    easiness_factor: newState.easinessFactor,
+    interval_days: newState.intervalDays,
+    repetitions: newState.repetitions,
+    next_review: newState.nextReview,
+  });
+
+  if (reviewError) {
+    return NextResponse.json({ error: reviewError.message }, { status: 500 });
+  }
 
   return NextResponse.json({
-    ...result,
-    message: `Next review: ${result.nextReview} (${result.intervalDays} days)`,
+    success: true,
+    nextReview: newState.nextReview,
+    intervalDays: newState.intervalDays,
   });
 }

@@ -1,25 +1,17 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
 
 export async function GET() {
-  const db = getDb();
-  const users = db.prepare("SELECT * FROM users ORDER BY name").all();
-  return NextResponse.json(users);
-}
+  const supabase = await createServerSupabaseClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-export async function POST(request: Request) {
-  const { name } = await request.json();
-  if (!name || typeof name !== "string" || name.trim().length === 0) {
-    return NextResponse.json({ error: "Name is required" }, { status: 400 });
-  }
-  const db = getDb();
-  try {
-    const result = db
-      .prepare("INSERT INTO users (name) VALUES (?)")
-      .run(name.trim());
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
-    return NextResponse.json(user, { status: 201 });
-  } catch {
-    return NextResponse.json({ error: "User already exists" }, { status: 409 });
-  }
+  const { data: profile, error } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", user.id)
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json(profile);
 }

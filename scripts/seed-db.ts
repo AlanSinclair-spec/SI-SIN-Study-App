@@ -1,10 +1,87 @@
-import Database from "better-sqlite3";
-import path from "path";
-import { initializeSchema } from "../src/lib/schema";
+import { createClient } from "@supabase/supabase-js";
 import { books } from "../src/data/seed/books";
-import { users } from "../src/data/seed/users";
 
-// Dynamic imports to handle missing files gracefully
+// Use service role key for seeding (bypasses RLS)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables");
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+interface SeedChapter {
+  ref: string;
+  number: number;
+  title: string;
+  slug: string;
+  summary?: string;
+  bookRef?: string;
+}
+
+interface SeedConcept {
+  ref: string;
+  chapterRef: string;
+  title: string;
+  description: string;
+  importance: string;
+}
+
+interface SeedArgument {
+  conceptRef: string;
+  title: string;
+  description: string;
+}
+
+interface SeedQuote {
+  chapterRef: string;
+  text: string;
+  context?: string;
+}
+
+interface SeedFlashcard {
+  bookRef: string;
+  chapterRef?: string;
+  front: string;
+  back: string;
+  difficulty?: string;
+  tags?: string[];
+}
+
+interface SeedQuizQuestion {
+  bookRef: string;
+  chapterRef?: string;
+  question_type: string;
+  question_text: string;
+  correct_answer: string;
+  option_a?: string;
+  option_b?: string;
+  option_c?: string;
+  option_d?: string;
+  explanation?: string;
+  difficulty?: string;
+}
+
+interface SeedConnection {
+  title: string;
+  description: string;
+  sin_theme: string;
+  si_theme: string;
+  relationship: string;
+  detailed_analysis?: string;
+}
+
+interface BookSeed {
+  ref: string;
+  title: string;
+  author: string;
+  slug: string;
+  description: string;
+  year: number;
+}
+
 async function loadModule(modulePath: string) {
   try {
     return await import(modulePath);
@@ -15,263 +92,155 @@ async function loadModule(modulePath: string) {
 }
 
 async function seed() {
-  const dbPath = path.join(process.cwd(), "study-app.db");
-  console.log(`Seeding database at: ${dbPath}`);
+  console.log("Seeding Supabase database...");
+  console.log(`URL: ${supabaseUrl}`);
 
-  const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-
-  // Initialize schema
-  initializeSchema(db);
-  console.log("Schema initialized.");
-
-  // Clear existing data
-  const tables = [
-    "tutor_conversations",
-    "quiz_answers",
-    "quizzes",
-    "quiz_questions",
-    "user_flashcard_state",
-    "flashcard_reviews",
-    "flashcards",
-    "connections",
-    "quotes",
-    "arguments",
-    "concepts",
-    "chapters",
-    "study_sessions",
-    "users",
-    "books",
+  // Clear existing content data (in reverse FK order)
+  const contentTables = [
+    "connections", "quiz_questions", "flashcards", "quotes",
+    "arguments", "concepts", "chapters", "books",
   ];
-  for (const table of tables) {
-    db.prepare(`DELETE FROM ${table}`).run();
+  for (const table of contentTables) {
+    const { error } = await supabase.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    if (error) console.warn(`  Warning clearing ${table}: ${error.message}`);
   }
-  console.log("Cleared existing data.");
-
-  // ─── USERS ───────────────────────────────────────────────────────
-  const insertUser = db.prepare("INSERT INTO users (name) VALUES (?)");
-  for (const user of users) {
-    insertUser.run(user.name);
-  }
-  console.log(`Inserted ${users.length} users.`);
+  console.log("Cleared existing content data.");
 
   // ─── BOOKS ───────────────────────────────────────────────────────
-  const insertBook = db.prepare(
-    "INSERT INTO books (title, author, slug, description, year) VALUES (?, ?, ?, ?, ?)"
-  );
-  const bookIdMap: Record<string, number> = {};
-  for (const book of books) {
-    const result = insertBook.run(
-      book.title,
-      book.author,
-      book.slug,
-      book.description,
-      book.year
-    );
-    bookIdMap[book.ref] = Number(result.lastInsertRowid);
+  const bookIdMap: Record<string, string> = {};
+  for (const book of books as BookSeed[]) {
+    const { data, error } = await supabase.from("books").insert({
+      title: book.title, author: book.author, slug: book.slug,
+      description: book.description, year: book.year,
+    }).select("id").single();
+    if (error) { console.error(`Error inserting book: ${error.message}`); continue; }
+    bookIdMap[book.ref] = data.id;
   }
-  console.log(`Inserted ${books.length} books.`);
+  console.log(`Inserted ${Object.keys(bookIdMap).length} books.`);
 
   // ─── CHAPTERS ────────────────────────────────────────────────────
-  const insertChapter = db.prepare(
-    "INSERT INTO chapters (book_id, number, title, slug, summary) VALUES (?, ?, ?, ?, ?)"
-  );
-  const chapterIdMap: Record<string, number> = {};
-
+  const chapterIdMap: Record<string, string> = {};
   const sinChaptersMod = await loadModule("../src/data/seed/sin-chapters");
   const siChaptersMod = await loadModule("../src/data/seed/si-chapters");
-
-  const allChapters = [
-    ...(sinChaptersMod?.sinChapters || []).map((c: any) => ({ ...c, bookRef: "sin" })),
-    ...(siChaptersMod?.siChapters || []).map((c: any) => ({ ...c, bookRef: "si" })),
+  const allChapters: SeedChapter[] = [
+    ...(sinChaptersMod?.sinChapters || []).map((c: SeedChapter) => ({ ...c, bookRef: "sin" })),
+    ...(siChaptersMod?.siChapters || []).map((c: SeedChapter) => ({ ...c, bookRef: "si" })),
   ];
-
   for (const ch of allChapters) {
-    const bookId = bookIdMap[ch.bookRef];
+    const bookId = bookIdMap[ch.bookRef || ""];
     if (!bookId) continue;
-    const result = insertChapter.run(bookId, ch.number, ch.title, ch.slug, ch.summary || null);
-    chapterIdMap[ch.ref] = Number(result.lastInsertRowid);
+    const { data, error } = await supabase.from("chapters").insert({
+      book_id: bookId, number: ch.number, title: ch.title,
+      slug: ch.slug, summary: ch.summary || null,
+    }).select("id").single();
+    if (error) { console.error(`Error inserting chapter: ${error.message}`); continue; }
+    chapterIdMap[ch.ref] = data.id;
   }
-  console.log(`Inserted ${allChapters.length} chapters.`);
+  console.log(`Inserted ${Object.keys(chapterIdMap).length} chapters.`);
 
   // ─── CONCEPTS ────────────────────────────────────────────────────
-  const insertConcept = db.prepare(
-    "INSERT INTO concepts (chapter_id, title, description, importance) VALUES (?, ?, ?, ?)"
-  );
-  const conceptIdMap: Record<string, number> = {};
-
+  const conceptIdMap: Record<string, string> = {};
   const sinConceptsMod = await loadModule("../src/data/seed/sin-concepts");
   const siConceptsMod = await loadModule("../src/data/seed/si-concepts");
-
-  const allConcepts = [
-    ...(sinConceptsMod?.sinConcepts || []),
-    ...(siConceptsMod?.siConcepts || []),
-  ];
-
+  const allConcepts: SeedConcept[] = [...(sinConceptsMod?.sinConcepts || []), ...(siConceptsMod?.siConcepts || [])];
   for (const concept of allConcepts) {
     const chapterId = chapterIdMap[concept.chapterRef];
     if (!chapterId) continue;
-    const validImportance = ["core", "supporting", "supplementary"].includes(concept.importance) ? concept.importance : "core";
-    const result = insertConcept.run(
-      chapterId,
-      concept.title,
-      concept.description,
-      validImportance
-    );
-    conceptIdMap[concept.ref] = Number(result.lastInsertRowid);
+    const importance = ["core", "supporting", "supplementary"].includes(concept.importance) ? concept.importance : "core";
+    const { data, error } = await supabase.from("concepts").insert({
+      chapter_id: chapterId, title: concept.title, description: concept.description, importance,
+    }).select("id").single();
+    if (error) { console.error(`Error inserting concept: ${error.message}`); continue; }
+    conceptIdMap[concept.ref] = data.id;
   }
-  console.log(`Inserted ${allConcepts.length} concepts.`);
+  console.log(`Inserted ${Object.keys(conceptIdMap).length} concepts.`);
 
   // ─── ARGUMENTS ───────────────────────────────────────────────────
-  const insertArgument = db.prepare(
-    "INSERT INTO arguments (concept_id, title, description) VALUES (?, ?, ?)"
-  );
-
   const sinArgsMod = await loadModule("../src/data/seed/sin-arguments");
   const siArgsMod = await loadModule("../src/data/seed/si-arguments");
-
-  const allArguments = [
-    ...(sinArgsMod?.sinArguments || []),
-    ...(siArgsMod?.siArguments || []),
-  ];
-
+  const allArguments: SeedArgument[] = [...(sinArgsMod?.sinArguments || []), ...(siArgsMod?.siArguments || [])];
   let argCount = 0;
   for (const arg of allArguments) {
     const conceptId = conceptIdMap[arg.conceptRef];
     if (!conceptId) continue;
-    insertArgument.run(conceptId, arg.title, arg.description);
-    argCount++;
+    const { error } = await supabase.from("arguments").insert({ concept_id: conceptId, title: arg.title, description: arg.description });
+    if (!error) argCount++;
   }
   console.log(`Inserted ${argCount} arguments.`);
 
   // ─── QUOTES ──────────────────────────────────────────────────────
-  const insertQuote = db.prepare(
-    "INSERT INTO quotes (chapter_id, text, context) VALUES (?, ?, ?)"
-  );
-
   const sinQuotesMod = await loadModule("../src/data/seed/sin-quotes");
   const siQuotesMod = await loadModule("../src/data/seed/si-quotes");
-
-  const allQuotes = [
-    ...(sinQuotesMod?.sinQuotes || []),
-    ...(siQuotesMod?.siQuotes || []),
-  ];
-
+  const allQuotes: SeedQuote[] = [...(sinQuotesMod?.sinQuotes || []), ...(siQuotesMod?.siQuotes || [])];
   let quoteCount = 0;
   for (const quote of allQuotes) {
     const chapterId = chapterIdMap[quote.chapterRef];
     if (!chapterId) continue;
-    insertQuote.run(chapterId, quote.text, quote.context || null);
-    quoteCount++;
+    const { error } = await supabase.from("quotes").insert({ chapter_id: chapterId, text: quote.text, context: quote.context || null });
+    if (!error) quoteCount++;
   }
   console.log(`Inserted ${quoteCount} quotes.`);
 
   // ─── FLASHCARDS ──────────────────────────────────────────────────
-  const insertFlashcard = db.prepare(
-    "INSERT INTO flashcards (book_id, chapter_id, concept_id, front, back, difficulty, tags) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  );
-
   const sinFlashcardsMod = await loadModule("../src/data/seed/flashcards-sin");
   const siFlashcardsMod = await loadModule("../src/data/seed/flashcards-si");
-
-  const allFlashcards = [
-    ...(sinFlashcardsMod?.sinFlashcards || []),
-    ...(siFlashcardsMod?.siFlashcards || []),
-  ];
-
+  const allFlashcards: SeedFlashcard[] = [...(sinFlashcardsMod?.sinFlashcards || []), ...(siFlashcardsMod?.siFlashcards || [])];
   let fcCount = 0;
   for (const fc of allFlashcards) {
     const bookId = bookIdMap[fc.bookRef];
     if (!bookId) continue;
     const chapterId = fc.chapterRef ? chapterIdMap[fc.chapterRef] || null : null;
-    insertFlashcard.run(
-      bookId,
-      chapterId,
-      null, // concept_id - would need conceptRef mapping
-      fc.front,
-      fc.back,
-      fc.difficulty || "intermediate",
-      fc.tags ? JSON.stringify(fc.tags) : null
-    );
-    fcCount++;
+    const { error } = await supabase.from("flashcards").insert({
+      book_id: bookId, chapter_id: chapterId, front: fc.front, back: fc.back,
+      difficulty: fc.difficulty || "intermediate", tags: fc.tags ? JSON.stringify(fc.tags) : null,
+    });
+    if (!error) fcCount++;
   }
   console.log(`Inserted ${fcCount} flashcards.`);
 
   // ─── QUIZ QUESTIONS ──────────────────────────────────────────────
-  const insertQuizQuestion = db.prepare(
-    `INSERT INTO quiz_questions (book_id, chapter_id, question_type, question_text, correct_answer, option_a, option_b, option_c, option_d, explanation, difficulty)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
   const quizMod = await loadModule("../src/data/seed/quiz-questions");
-  const allQuizQuestions = quizMod?.quizQuestions || [];
-
+  const allQuizQuestions: SeedQuizQuestion[] = quizMod?.quizQuestions || [];
   let qqCount = 0;
   for (const qq of allQuizQuestions) {
     const bookId = qq.bookRef === "cross" ? null : bookIdMap[qq.bookRef] || null;
     const chapterId = qq.chapterRef ? chapterIdMap[qq.chapterRef] || null : null;
     const questionType = qq.question_type === "mc" ? "multiple_choice" : qq.question_type === "short" ? "short_answer" : qq.question_type;
-    insertQuizQuestion.run(
-      bookId,
-      chapterId,
-      questionType,
-      qq.question_text,
-      qq.correct_answer,
-      qq.option_a || null,
-      qq.option_b || null,
-      qq.option_c || null,
-      qq.option_d || null,
-      qq.explanation || null,
-      qq.difficulty || "intermediate"
-    );
-    qqCount++;
+    const { error } = await supabase.from("quiz_questions").insert({
+      book_id: bookId, chapter_id: chapterId, question_type: questionType,
+      question_text: qq.question_text, correct_answer: qq.correct_answer,
+      option_a: qq.option_a || null, option_b: qq.option_b || null,
+      option_c: qq.option_c || null, option_d: qq.option_d || null,
+      explanation: qq.explanation || null, difficulty: qq.difficulty || "intermediate",
+    });
+    if (!error) qqCount++;
   }
   console.log(`Inserted ${qqCount} quiz questions.`);
 
   // ─── CONNECTIONS ─────────────────────────────────────────────────
-  const insertConnection = db.prepare(
-    `INSERT INTO connections (title, description, sin_theme, si_theme, relationship, detailed_analysis)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  );
-
   const connectionsMod = await loadModule("../src/data/seed/connections");
-  const allConnections = connectionsMod?.connections || [];
-
+  const allConnections: SeedConnection[] = connectionsMod?.connections || [];
+  let connCount = 0;
   for (const conn of allConnections) {
-    insertConnection.run(
-      conn.title,
-      conn.description,
-      conn.sin_theme,
-      conn.si_theme,
-      conn.relationship,
-      conn.detailed_analysis || null
-    );
+    const { error } = await supabase.from("connections").insert({
+      title: conn.title, description: conn.description, sin_theme: conn.sin_theme,
+      si_theme: conn.si_theme, relationship: conn.relationship, detailed_analysis: conn.detailed_analysis || null,
+    });
+    if (!error) connCount++;
   }
-  console.log(`Inserted ${allConnections.length} connections.`);
+  console.log(`Inserted ${connCount} connections.`);
 
   // ─── SUMMARY ─────────────────────────────────────────────────────
   console.log("\n=== Seed Summary ===");
-  const counts = [
-    ["users", db.prepare("SELECT COUNT(*) as c FROM users").get()],
-    ["books", db.prepare("SELECT COUNT(*) as c FROM books").get()],
-    ["chapters", db.prepare("SELECT COUNT(*) as c FROM chapters").get()],
-    ["concepts", db.prepare("SELECT COUNT(*) as c FROM concepts").get()],
-    ["arguments", db.prepare("SELECT COUNT(*) as c FROM arguments").get()],
-    ["quotes", db.prepare("SELECT COUNT(*) as c FROM quotes").get()],
-    ["flashcards", db.prepare("SELECT COUNT(*) as c FROM flashcards").get()],
-    ["quiz_questions", db.prepare("SELECT COUNT(*) as c FROM quiz_questions").get()],
-    ["connections", db.prepare("SELECT COUNT(*) as c FROM connections").get()],
-  ];
-  for (const [name, row] of counts) {
-    console.log(`  ${name}: ${(row as { c: number }).c}`);
+  const tables = ["books", "chapters", "concepts", "arguments", "quotes", "flashcards", "quiz_questions", "connections"];
+  for (const table of tables) {
+    const { count } = await supabase.from(table).select("*", { count: "exact", head: true });
+    console.log(`  ${table}: ${count ?? 0}`);
   }
-
-  db.close();
-  console.log("\nDone! Database seeded successfully.");
+  console.log("\nDone! Supabase database seeded successfully.");
 }
 
-seed().catch((err) => {
+seed().catch((err: Error) => {
   console.error("Seed failed:", err);
   process.exit(1);
 });

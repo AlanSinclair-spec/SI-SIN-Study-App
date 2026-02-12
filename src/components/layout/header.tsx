@@ -1,17 +1,24 @@
 "use client";
 
 import { Search, Menu } from "lucide-react";
-import { UserSwitcher } from "./user-switcher";
+import { AuthMenu } from "./auth-menu";
+import { ThemeToggle } from "./theme-toggle";
 import { useState } from "react";
 import { MobileNav } from "./mobile-nav";
+
+interface SearchResult {
+  type: string;
+  id: string;
+  title: string;
+  snippet: string;
+  book: string;
+}
 
 export function Header() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<
-    Array<{ type: string; id: number; title: string; description: string; book_title: string; chapter_title: string }>
-  >([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
@@ -21,7 +28,7 @@ export function Header() {
     }
     const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
     if (res.ok) {
-      const data = await res.json();
+      const data: SearchResult[] = await res.json();
       setSearchResults(data);
     }
   };
@@ -49,7 +56,10 @@ export function Header() {
             </button>
           </div>
         </div>
-        <UserSwitcher />
+        <div className="flex items-center gap-1">
+          <ThemeToggle />
+          <AuthMenu />
+        </div>
       </header>
 
       {/* Search overlay */}
@@ -70,7 +80,7 @@ export function Header() {
                 autoFocus
                 value={searchQuery}
                 onChange={(e) => handleSearch(e.target.value)}
-                placeholder="Search concepts, flashcards, quotes..."
+                placeholder="Search concepts, flashcards, quotes, notes..."
                 className="flex-1 h-11 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
@@ -91,6 +101,8 @@ export function Header() {
                         ? `/knowledge`
                         : result.type === "flashcard"
                         ? `/flashcards`
+                        : result.type === "note"
+                        ? `/notes`
                         : `/knowledge`
                     }
                     onClick={() => {
@@ -107,7 +119,7 @@ export function Header() {
                       <span className="text-sm font-medium truncate">{result.title}</span>
                     </div>
                     <span className="text-xs text-muted-foreground truncate">
-                      {result.book_title} — {result.chapter_title}
+                      {result.snippet}
                     </span>
                   </a>
                 ))}

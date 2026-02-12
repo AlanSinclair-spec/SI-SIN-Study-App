@@ -2,17 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useUser } from "@/contexts/user-context";
+import { useAuth } from "@/contexts/auth-context";
 import { HelpCircle } from "lucide-react";
 
 interface BookOption {
-  id: number;
+  id: string;
   title: string;
   slug: string;
 }
 
 export default function QuizConfigPage() {
-  const { currentUser } = useUser();
+  const { user, isLoading } = useAuth();
   const router = useRouter();
   const [books, setBooks] = useState<BookOption[]>([]);
   const [bookId, setBookId] = useState<string>("");
@@ -23,29 +23,46 @@ export default function QuizConfigPage() {
   useEffect(() => {
     fetch("/api/books")
       .then((r) => r.json())
-      .then(setBooks);
+      .then(setBooks)
+      .catch(() => {});
   }, []);
 
   const startQuiz = async () => {
-    if (!currentUser) return;
+    if (!user) return;
     setStarting(true);
 
-    const res = await fetch("/api/quiz/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: currentUser.id,
-        bookId: bookId || undefined,
-        quizType,
-        count: questionCount,
-      }),
-    });
+    try {
+      const res = await fetch("/api/quiz/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bookId: bookId || undefined,
+          quizType,
+          count: questionCount,
+        }),
+      });
 
-    const data = await res.json();
-    // Store quiz data in sessionStorage for the quiz session page
-    sessionStorage.setItem("activeQuiz", JSON.stringify(data));
-    router.push("/quiz/session");
+      const data = await res.json();
+      // Store questions and bookId in sessionStorage (no quizId needed anymore)
+      sessionStorage.setItem(
+        "activeQuiz",
+        JSON.stringify({ questions: data.questions || data, bookId: bookId || undefined })
+      );
+      router.push("/quiz/session");
+    } catch {
+      setStarting(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="max-w-lg mx-auto space-y-6">
+        <div className="h-12 w-12 bg-muted rounded-lg animate-pulse mx-auto" />
+        <div className="h-8 w-48 bg-muted rounded animate-pulse mx-auto" />
+        <div className="h-64 bg-muted rounded-lg animate-pulse" />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
@@ -112,7 +129,7 @@ export default function QuizConfigPage() {
 
         <button
           onClick={startQuiz}
-          disabled={starting || !currentUser}
+          disabled={starting || !user}
           className="w-full px-4 py-2.5 rounded-md bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {starting ? "Generating Quiz..." : "Start Quiz"}

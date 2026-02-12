@@ -7,7 +7,7 @@ import { ArrowLeft, Check, X, ChevronRight } from "lucide-react";
 import Link from "next/link";
 
 interface Question {
-  id: number;
+  id: string;
   question_type: "multiple_choice" | "short_answer";
   question_text: string;
   correct_answer: string;
@@ -20,32 +20,40 @@ interface Question {
 }
 
 interface QuizData {
-  quizId: number;
   questions: Question[];
+  bookId?: string;
 }
 
-interface SubmitResult {
-  questionId: number;
-  userAnswer: string;
-  correctAnswer: string;
-  isCorrect: boolean;
+interface SubmitResultAnswer {
+  question_id: string;
+  user_answer: string;
+  correct_answer: string;
+  is_correct: boolean;
   explanation: string | null;
+  question_text: string;
+}
+
+interface SubmitResponse {
+  score: number;
+  total_questions: number;
+  correct_count: number;
+  answers: SubmitResultAnswer[];
 }
 
 export default function QuizSessionPage() {
   const router = useRouter();
   const [quiz, setQuiz] = useState<QuizData | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [selectedOption, setSelectedOption] = useState<string>("");
   const [shortAnswer, setShortAnswer] = useState("");
-  const [results, setResults] = useState<SubmitResult[] | null>(null);
-  const [score, setScore] = useState<{ score: number; correctCount: number; totalQuestions: number } | null>(null);
+  const [results, setResults] = useState<SubmitResponse | null>(null);
 
   useEffect(() => {
     const stored = sessionStorage.getItem("activeQuiz");
     if (stored) {
-      setQuiz(JSON.parse(stored));
+      const parsed = JSON.parse(stored);
+      setQuiz(parsed);
     } else {
       router.push("/quiz");
     }
@@ -84,47 +92,46 @@ export default function QuizSessionPage() {
     };
 
     const answerArray = Object.entries(finalAnswers).map(([qId, answer]) => ({
-      questionId: Number(qId),
+      questionId: qId,
       userAnswer: answer,
     }));
 
-    const res = await fetch("/api/quiz/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quizId: quiz.quizId,
-        answers: answerArray,
-      }),
-    });
+    try {
+      const res = await fetch("/api/quiz/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          answers: answerArray,
+          bookId: quiz.bookId,
+        }),
+      });
 
-    const data = await res.json();
-    setResults(data.results);
-    setScore({
-      score: data.score,
-      correctCount: data.correctCount,
-      totalQuestions: data.totalQuestions,
-    });
-    sessionStorage.removeItem("activeQuiz");
+      const data: SubmitResponse = await res.json();
+      setResults(data);
+      sessionStorage.removeItem("activeQuiz");
+    } catch {
+      // Handle error silently
+    }
   };
 
   // Results view
-  if (results && score) {
+  if (results) {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="text-center">
           <h2 className="text-2xl font-bold">Quiz Results</h2>
           <div className="mt-4 flex items-center justify-center gap-6">
             <div className="text-center">
-              <p className="text-4xl font-bold">{Math.round(score.score)}%</p>
+              <p className="text-4xl font-bold">{Math.round(results.score)}%</p>
               <p className="text-sm text-muted-foreground">Score</p>
             </div>
             <div className="text-center">
-              <p className="text-4xl font-bold text-green-400">{score.correctCount}</p>
+              <p className="text-4xl font-bold text-green-400">{results.correct_count}</p>
               <p className="text-sm text-muted-foreground">Correct</p>
             </div>
             <div className="text-center">
               <p className="text-4xl font-bold text-red-400">
-                {score.totalQuestions - score.correctCount}
+                {results.total_questions - results.correct_count}
               </p>
               <p className="text-sm text-muted-foreground">Wrong</p>
             </div>
@@ -132,46 +139,43 @@ export default function QuizSessionPage() {
         </div>
 
         <div className="space-y-3">
-          {results.map((result, i) => {
-            const question = quiz.questions.find((q) => q.id === result.questionId);
-            return (
-              <div
-                key={i}
-                className={cn(
-                  "rounded-lg border p-4",
-                  result.isCorrect
-                    ? "border-green-500/30 bg-green-500/5"
-                    : "border-red-500/30 bg-red-500/5"
+          {results.answers.map((result, i) => (
+            <div
+              key={i}
+              className={cn(
+                "rounded-lg border p-4",
+                result.is_correct
+                  ? "border-green-500/30 bg-green-500/5"
+                  : "border-red-500/30 bg-red-500/5"
+              )}
+            >
+              <div className="flex items-start gap-2">
+                {result.is_correct ? (
+                  <Check className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <X className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
                 )}
-              >
-                <div className="flex items-start gap-2">
-                  {result.isCorrect ? (
-                    <Check className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
-                  ) : (
-                    <X className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-                  )}
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{question?.question_text}</p>
-                    {!result.isCorrect && (
-                      <div className="mt-2 text-sm">
-                        <p className="text-red-400">
-                          Your answer: {result.userAnswer}
-                        </p>
-                        <p className="text-green-400">
-                          Correct: {result.correctAnswer}
-                        </p>
-                      </div>
-                    )}
-                    {result.explanation && (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        {result.explanation}
+                <div className="flex-1">
+                  <p className="text-sm font-medium">{result.question_text}</p>
+                  {!result.is_correct && (
+                    <div className="mt-2 text-sm">
+                      <p className="text-red-400">
+                        Your answer: {result.user_answer}
                       </p>
-                    )}
-                  </div>
+                      <p className="text-green-400">
+                        Correct: {result.correct_answer}
+                      </p>
+                    </div>
+                  )}
+                  {result.explanation && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {result.explanation}
+                    </p>
+                  )}
                 </div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
 
         <div className="flex gap-3 justify-center">

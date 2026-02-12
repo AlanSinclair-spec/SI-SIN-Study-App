@@ -1,15 +1,14 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useUser } from "@/contexts/user-context";
-import { useRouter } from "next/navigation";
+import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
 import { RATING_LABELS } from "@/lib/sm2";
 import { ArrowLeft, RotateCcw, Check } from "lucide-react";
 import Link from "next/link";
 
 interface FlashcardData {
-  id: number;
+  id: string;
   front: string;
   back: string;
   difficulty: string;
@@ -19,13 +18,12 @@ interface FlashcardData {
 }
 
 interface ReviewResult {
-  cardId: number;
+  cardId: string;
   quality: number;
 }
 
 export default function FlashcardReviewPage() {
-  const { currentUser } = useUser();
-  const router = useRouter();
+  const { user, isLoading: authLoading } = useAuth();
   const [cards, setCards] = useState<FlashcardData[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -34,27 +32,27 @@ export default function FlashcardReviewPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!currentUser) return;
-    fetch(`/api/flashcards/due?userId=${currentUser.id}&limit=20`)
+    if (!user) return;
+    fetch("/api/flashcards/due?limit=20")
       .then((r) => r.json())
       .then((data) => {
         setCards(data);
         setLoading(false);
-      });
-  }, [currentUser]);
+      })
+      .catch(() => setLoading(false));
+  }, [user]);
 
   const currentCard = cards[currentIndex];
 
   const handleRate = useCallback(
     async (quality: number) => {
-      if (!currentUser || !currentCard) return;
+      if (!user || !currentCard) return;
 
       // Submit review
       await fetch("/api/flashcards/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: currentUser.id,
           flashcardId: currentCard.id,
           quality,
         }),
@@ -69,7 +67,7 @@ export default function FlashcardReviewPage() {
         setIsComplete(true);
       }
     },
-    [currentUser, currentCard, currentIndex, cards.length]
+    [user, currentCard, currentIndex, cards.length]
   );
 
   // Keyboard shortcuts
@@ -87,7 +85,7 @@ export default function FlashcardReviewPage() {
     return () => window.removeEventListener("keydown", handler);
   }, [isFlipped, handleRate]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">
@@ -162,11 +160,10 @@ export default function FlashcardReviewPage() {
               setResults([]);
               setIsComplete(false);
               // Reload due cards
-              if (currentUser) {
-                fetch(`/api/flashcards/due?userId=${currentUser.id}&limit=20`)
-                  .then((r) => r.json())
-                  .then(setCards);
-              }
+              fetch("/api/flashcards/due?limit=20")
+                .then((r) => r.json())
+                .then(setCards)
+                .catch(() => {});
             }}
             className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
           >

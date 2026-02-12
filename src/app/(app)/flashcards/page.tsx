@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useUser } from "@/contexts/user-context";
+import { useAuth } from "@/contexts/auth-context";
 import { Layers, Play, BookOpen } from "lucide-react";
 
 interface DeckStats {
@@ -12,29 +12,30 @@ interface DeckStats {
 }
 
 interface BookDeck {
-  id: number;
+  id: string;
   title: string;
   slug: string;
   total: number;
 }
 
 export default function FlashcardsPage() {
-  const { currentUser } = useUser();
+  const { user, isLoading } = useAuth();
   const [stats, setStats] = useState<DeckStats>({ total: 0, due: 0, reviewed: 0 });
   const [books, setBooks] = useState<BookDeck[]>([]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!user) return;
 
     // Get total flashcards
     fetch("/api/flashcards")
       .then((r) => r.json())
       .then((cards: unknown[]) => {
         setStats((prev) => ({ ...prev, total: cards.length }));
-      });
+      })
+      .catch(() => {});
 
     // Get due cards count
-    fetch(`/api/flashcards/due?userId=${currentUser.id}&limit=999`)
+    fetch("/api/flashcards/due?limit=999")
       .then((r) => r.json())
       .then((due: unknown[]) => {
         setStats((prev) => ({
@@ -42,13 +43,28 @@ export default function FlashcardsPage() {
           due: due.length,
           reviewed: prev.total - due.length,
         }));
-      });
+      })
+      .catch(() => {});
 
     // Get books for filtering
     fetch("/api/books")
       .then((r) => r.json())
-      .then(setBooks);
-  }, [currentUser]);
+      .then(setBooks)
+      .catch(() => {});
+  }, [user]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-48 bg-muted rounded animate-pulse" />
+        <div className="grid grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-20 bg-muted rounded-lg animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
