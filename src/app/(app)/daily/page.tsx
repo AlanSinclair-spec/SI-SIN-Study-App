@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useUser } from "@/contexts/user-context";
 import { useRouter } from "next/navigation";
 import {
@@ -18,17 +18,48 @@ import { RATING_LABELS } from "@/lib/sm2";
 type Step = "flashcards" | "quiz" | "tutor";
 
 interface FlashcardData {
-  id: number;
+  id: string;
   front: string;
   back: string;
-  book_title: string;
-  chapter_title: string;
+  bookTitle: string;
+  chapterTitle: string;
+}
+
+interface QuizQuestion {
+  id: string;
+  questionType: string;
+  questionText: string;
+  correctAnswer: string;
+  optionA?: string;
+  optionB?: string;
+  optionC?: string;
+  optionD?: string;
+  // Legacy field names
+  question_type?: string;
+  question_text?: string;
+  option_a?: string;
+  option_b?: string;
+  option_c?: string;
+  option_d?: string;
+}
+
+interface QuizDataShape {
+  quizId: string;
+  questions: QuizQuestion[];
+}
+
+function getQType(q: QuizQuestion): string {
+  return q.questionType || q.question_type || "multiple_choice";
+}
+
+function getQText(q: QuizQuestion): string {
+  return q.questionText || q.question_text || "";
 }
 
 export default function DailySessionPage() {
-  const { currentUser } = useUser();
+  const { user, loading } = useUser();
   const router = useRouter();
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [_sessionId, setSessionId] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState<Step>("flashcards");
   const [started, setStarted] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -39,16 +70,13 @@ export default function DailySessionPage() {
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [flashcardsComplete, setFlashcardsComplete] = useState(false);
-  const [flashcardsReviewed, setFlashcardsReviewed] = useState(0);
+  const [, setFlashcardsReviewed] = useState(0);
 
   // Quiz state
-  const [quizData, setQuizData] = useState<{ quizId: number; questions: Array<{
-    id: number; question_type: string; question_text: string; correct_answer: string;
-    option_a: string; option_b: string; option_c: string; option_d: string;
-  }> } | null>(null);
+  const [quizData, setQuizData] = useState<QuizDataShape | null>(null);
   const [quizIndex, setQuizIndex] = useState(0);
   const [quizAnswer, setQuizAnswer] = useState("");
-  const [quizAnswers, setQuizAnswers] = useState<Array<{ questionId: number; userAnswer: string }>>([]);
+  const [quizAnswers, setQuizAnswers] = useState<Array<{ questionId: string; userAnswer: string }>>([]);
   const [quizComplete, setQuizComplete] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
 
@@ -58,7 +86,7 @@ export default function DailySessionPage() {
   const [tutorStreaming, setTutorStreaming] = useState(false);
   const [tutorExchanges, setTutorExchanges] = useState(0);
   const [tutorComplete, setTutorComplete] = useState(false);
-  const [conversationId, setConversationId] = useState<number | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   // Timer
   useEffect(() => {
@@ -70,19 +98,13 @@ export default function DailySessionPage() {
   }, [startTime]);
 
   const startSession = async () => {
-    if (!currentUser) return;
-    const res = await fetch("/api/daily", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: currentUser.id, action: "start" }),
-    });
-    const session = await res.json();
-    setSessionId(session.id);
+    if (!user) return;
+    setSessionId(`daily-${Date.now()}`);
     setStarted(true);
     setStartTime(Date.now());
 
     // Load flashcards
-    const cardsRes = await fetch(`/api/flashcards/due?userId=${currentUser.id}&limit=15`);
+    const cardsRes = await fetch("/api/flashcards/due?limit=15");
     const dueCards = await cardsRes.json();
     setCards(dueCards);
     if (dueCards.length === 0) {
@@ -93,12 +115,11 @@ export default function DailySessionPage() {
   };
 
   const loadQuiz = async () => {
-    if (!currentUser) return;
+    if (!user) return;
     const res = await fetch("/api/quiz/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: currentUser.id,
         quizType: "mixed",
         count: 8,
       }),
@@ -108,12 +129,11 @@ export default function DailySessionPage() {
   };
 
   const handleFlashcardRate = async (quality: number) => {
-    if (!currentUser || !cards[cardIndex]) return;
+    if (!user || !cards[cardIndex]) return;
     await fetch("/api/flashcards/review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: currentUser.id,
         flashcardId: cards[cardIndex].id,
         quality,
       }),
@@ -143,21 +163,31 @@ export default function DailySessionPage() {
     }
   };
 
-  const finishQuiz = async (answers: Array<{ questionId: number; userAnswer: string }>) => {
+  const finishQuiz = async (answers: Array<{ questionId: string; userAnswer: string }>) => {
     if (!quizData) return;
+    // Compute isCorrect client-side and send in new API format
+    const questionsWithResults = answers.map((a) => {
+      const q = quizData.questions.find((qq) => qq.id === a.questionId);
+      const correctAns = q?.correctAnswer || "";
+      return {
+        questionId: a.questionId,
+        userAnswer: a.userAnswer,
+        isCorrect: a.userAnswer.trim().toLowerCase() === correctAns.trim().toLowerCase(),
+      };
+    });
     const res = await fetch("/api/quiz/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ quizId: quizData.quizId, answers }),
+      body: JSON.stringify({ book: "cross", questions: questionsWithResults }),
     });
     const data = await res.json();
-    setQuizScore(data.score);
+    setQuizScore(data.score ?? 0);
     setQuizComplete(true);
     setCurrentStep("tutor");
   };
 
   const sendTutorMessage = async (content: string) => {
-    if (!content.trim() || !currentUser || tutorStreaming) return;
+    if (!content.trim() || !user || tutorStreaming) return;
     setTutorInput("");
     setTutorStreaming(true);
     setTutorMessages((prev) => [...prev, { role: "user", content: content.trim() }]);
@@ -167,7 +197,6 @@ export default function DailySessionPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: currentUser.id,
           conversationId,
           message: content.trim(),
           difficulty: "intermediate",
@@ -197,27 +226,18 @@ export default function DailySessionPage() {
                 });
               }
               if (data.conversationId) setConversationId(data.conversationId);
-            } catch {}
+            } catch { /* skip malformed SSE */ }
           }
         }
       }
       setTutorExchanges((p) => p + 1);
-    } catch {}
+    } catch { /* connection error */ }
     setTutorStreaming(false);
   };
 
-  const completeSession = async () => {
-    if (sessionId) {
-      await fetch("/api/daily", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: currentUser?.id,
-          action: "complete",
-          sessionId,
-        }),
-      });
-    }
+  const completeSession = () => {
+    // Session tracking is handled through individual API calls
+    // (flashcard reviews, quiz submit, tutor conversations)
     router.push("/dashboard");
   };
 
@@ -226,6 +246,24 @@ export default function DailySessionPage() {
     { key: "quiz" as const, label: "Quiz", icon: HelpCircle, complete: quizComplete },
     { key: "tutor" as const, label: "AI Tutor", icon: MessageSquare, complete: tutorComplete },
   ];
+
+  if (loading) {
+    return (
+      <div className="max-w-lg mx-auto mt-8 text-center space-y-6">
+        <div className="w-16 h-16 rounded-full bg-muted animate-pulse mx-auto" />
+        <div className="h-8 w-48 bg-muted rounded animate-pulse mx-auto" />
+        <div className="h-32 bg-muted rounded-lg animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-muted-foreground">Please sign in to start a daily session.</p>
+      </div>
+    );
+  }
 
   if (!started) {
     return (
@@ -253,8 +291,7 @@ export default function DailySessionPage() {
         </div>
         <button
           onClick={startSession}
-          disabled={!currentUser}
-          className="w-full px-4 py-3 rounded-md bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-2"
+          className="w-full px-4 py-3 rounded-md bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors inline-flex items-center justify-center gap-2"
         >
           <Zap className="w-5 h-5" />
           Start Session
@@ -333,12 +370,14 @@ export default function DailySessionPage() {
         <div className="space-y-4">
           <h2 className="font-semibold">Quick Quiz ({quizIndex + 1}/{quizData.questions.length})</h2>
           <div className="rounded-lg border border-border bg-card p-5">
-            <p className="font-medium">{quizData.questions[quizIndex]?.question_text}</p>
+            <p className="font-medium">{getQText(quizData.questions[quizIndex])}</p>
           </div>
-          {quizData.questions[quizIndex]?.question_type === "multiple_choice" ? (
+          {getQType(quizData.questions[quizIndex]) === "multiple_choice" ? (
             <div className="space-y-2">
-              {["option_a", "option_b", "option_c", "option_d"].map((key) => {
-                const val = quizData.questions[quizIndex]?.[key as keyof typeof quizData.questions[0]] as string;
+              {(["optionA", "optionB", "optionC", "optionD"] as const).map((key) => {
+                const q = quizData.questions[quizIndex];
+                const legacyKey = key === "optionA" ? "option_a" : key === "optionB" ? "option_b" : key === "optionC" ? "option_c" : "option_d";
+                const val = q[key] || q[legacyKey as keyof typeof q] as string | undefined;
                 if (!val) return null;
                 return (
                   <button

@@ -1,73 +1,71 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
+
+interface SubmittedAnswer {
+  questionId: string;
+  userAnswer: string;
+  isCorrect: boolean;
+}
 
 export async function POST(request: Request) {
-  const { quizId, answers } = await request.json();
+  const supabase = await createServerSupabaseClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-  if (!quizId || !answers || !Array.isArray(answers)) {
+  if (authError || !user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await request.json() as {
+    book?: string;
+    chapter?: number;
+    questions?: SubmittedAnswer[];
+  };
+
+  const { book, chapter, questions } = body;
+
+  if (!book || !questions || !Array.isArray(questions)) {
     return NextResponse.json(
-      { error: "quizId and answers array required" },
+      { error: "book and questions array are required" },
       { status: 400 }
     );
   }
 
-  const db = getDb();
-  let correctCount = 0;
+  const correctCount = questions.filter((q) => q.isCorrect).length;
+  const totalQuestions = questions.length;
+  const score = totalQuestions > 0
+    ? Math.round((correctCount / totalQuestions) * 10000) / 100
+    : 0;
 
-  const insertAnswer = db.prepare(
-    `INSERT INTO quiz_answers (quiz_id, question_id, user_answer, is_correct)
-     VALUES (?, ?, ?, ?)`
-  );
+  const { data: result, error: insertError } = await supabase
+    .from("quiz_results")
+    .insert({
+      user_id: user.id,
+      book,
+      chapter: chapter ?? null,
+      score,
+      total_questions: totalQuestions,
+      answers: questions.map((q) => ({
+        questionId: q.questionId,
+        userAnswer: q.userAnswer,
+        isCorrect: q.isCorrect,
+      })),
+      completed_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
 
-  const getQuestion = db.prepare("SELECT * FROM quiz_questions WHERE id = ?");
-
-  const results: Array<{
-    questionId: number;
-    userAnswer: string;
-    correctAnswer: string;
-    isCorrect: boolean;
-    explanation: string | null;
-  }> = [];
-
-  for (const answer of answers) {
-    const question = getQuestion.get(answer.questionId) as {
-      id: number;
-      correct_answer: string;
-      explanation: string | null;
-    };
-
-    if (!question) continue;
-
-    const isCorrect =
-      answer.userAnswer.trim().toLowerCase() ===
-      question.correct_answer.trim().toLowerCase();
-
-    if (isCorrect) correctCount++;
-
-    insertAnswer.run(quizId, answer.questionId, answer.userAnswer, isCorrect ? 1 : 0);
-
-    results.push({
-      questionId: question.id,
-      userAnswer: answer.userAnswer,
-      correctAnswer: question.correct_answer,
-      isCorrect,
-      explanation: question.explanation,
-    });
+  if (insertError) {
+    return NextResponse.json(
+      { error: "Failed to save quiz results" },
+      { status: 500 }
+    );
   }
 
-  const score = answers.length > 0 ? (correctCount / answers.length) * 100 : 0;
-
-  // Update quiz record
-  db.prepare(
-    `UPDATE quizzes SET score = ?, correct_count = ?, completed_at = datetime('now')
-     WHERE id = ?`
-  ).run(Math.round(score * 100) / 100, correctCount, quizId);
-
   return NextResponse.json({
-    quizId,
-    score: Math.round(score * 100) / 100,
+    quizId: result.id,
+    score,
     correctCount,
-    totalQuestions: answers.length,
-    results,
+    totalQuestions,
+    results: questions,
   });
 }

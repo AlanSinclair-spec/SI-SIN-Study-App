@@ -26,12 +26,12 @@ const DIFFICULTY_OPTIONS = [
 ] as const;
 
 export default function TutorPage() {
-  const { currentUser } = useUser();
+  const { user, loading } = useUser();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [difficulty, setDifficulty] = useState<"beginner" | "intermediate" | "advanced">("intermediate");
-  const [conversationId, setConversationId] = useState<number | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -42,7 +42,7 @@ export default function TutorPage() {
   useEffect(scrollToBottom, [messages]);
 
   const sendMessage = async (content: string) => {
-    if (!content.trim() || !currentUser || isStreaming) return;
+    if (!content.trim() || !user || isStreaming) return;
 
     const userMessage: Message = { role: "user", content: content.trim() };
     setMessages((prev) => [...prev, userMessage]);
@@ -54,7 +54,6 @@ export default function TutorPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: currentUser.id,
           conversationId,
           message: content.trim(),
           difficulty,
@@ -125,6 +124,25 @@ export default function TutorPage() {
     setMessages([]);
     setConversationId(null);
   };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-7rem)]">
+        <div className="h-16 bg-muted rounded animate-pulse" />
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-muted-foreground">Please sign in to use the AI Tutor.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">

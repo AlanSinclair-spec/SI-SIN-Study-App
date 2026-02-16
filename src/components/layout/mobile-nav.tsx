@@ -10,6 +10,8 @@ import {
   Link as LinkIcon,
   MessageSquare,
   Zap,
+  FileText,
+  Highlighter,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,6 +25,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Link: LinkIcon,
   MessageSquare,
   Zap,
+  FileText,
+  Highlighter,
 };
 
 interface MobileNavProps {

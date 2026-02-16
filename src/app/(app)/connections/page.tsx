@@ -6,13 +6,17 @@ import { cn } from "@/lib/utils";
 import { RELATIONSHIP_COLORS } from "@/lib/constants";
 
 interface ConnectionData {
-  id: number;
   title: string;
   description: string;
-  sin_theme: string;
-  si_theme: string;
+  sinTheme: string;
+  siTheme: string;
   relationship: "parallel" | "contrast" | "complement" | "tension";
-  detailed_analysis: string | null;
+  detailedAnalysis: string;
+  // Legacy snake_case fields
+  sin_theme?: string;
+  si_theme?: string;
+  detailed_analysis?: string | null;
+  id?: number;
 }
 
 export default function ConnectionsPage() {
@@ -22,17 +26,28 @@ export default function ConnectionsPage() {
   useEffect(() => {
     fetch("/api/connections")
       .then((r) => r.json())
-      .then(setConnections);
+      .then((data) => {
+        // API may return { connections, userCrossReferences } or a flat array
+        if (Array.isArray(data)) {
+          setConnections(data);
+        } else if (data && Array.isArray(data.connections)) {
+          setConnections(data.connections);
+        }
+      });
   }, []);
 
-  const toggleExpanded = (id: number) => {
+  const toggleExpanded = (idx: number) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
       return next;
     });
   };
+
+  const getSinTheme = (conn: ConnectionData) => conn.sinTheme || conn.sin_theme || "";
+  const getSiTheme = (conn: ConnectionData) => conn.siTheme || conn.si_theme || "";
+  const getAnalysis = (conn: ConnectionData) => conn.detailedAnalysis || conn.detailed_analysis || "";
 
   return (
     <div className="space-y-6">
@@ -67,13 +82,13 @@ export default function ConnectionsPage() {
 
       {/* Connection cards */}
       <div className="space-y-4">
-        {connections.map((conn) => (
+        {connections.map((conn, idx) => (
           <div
-            key={conn.id}
+            key={idx}
             className="rounded-lg border border-border bg-card overflow-hidden"
           >
             <button
-              onClick={() => toggleExpanded(conn.id)}
+              onClick={() => toggleExpanded(idx)}
               className="w-full text-left p-5 hover:bg-accent/20 transition-colors"
             >
               <div className="flex items-start justify-between gap-3 mb-3">
@@ -95,25 +110,25 @@ export default function ConnectionsPage() {
                   <p className="text-[10px] uppercase font-medium text-blue-400 mb-1">
                     The Singularity Is Nearer
                   </p>
-                  <p className="text-sm">{conn.sin_theme}</p>
+                  <p className="text-sm">{getSinTheme(conn)}</p>
                 </div>
                 <div className="rounded-md bg-amber-500/5 border border-amber-500/20 p-3">
                   <p className="text-[10px] uppercase font-medium text-amber-400 mb-1">
                     The Sovereign Individual
                   </p>
-                  <p className="text-sm">{conn.si_theme}</p>
+                  <p className="text-sm">{getSiTheme(conn)}</p>
                 </div>
               </div>
             </button>
 
-            {expanded.has(conn.id) && conn.detailed_analysis && (
+            {expanded.has(idx) && getAnalysis(conn) && (
               <div className="border-t border-border p-5 bg-muted/20">
                 <div className="flex items-center gap-2 mb-2">
                   <ArrowLeftRight className="w-4 h-4 text-primary" />
                   <h4 className="text-sm font-medium">Detailed Analysis</h4>
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {conn.detailed_analysis}
+                  {getAnalysis(conn)}
                 </p>
               </div>
             )}

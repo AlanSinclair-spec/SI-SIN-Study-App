@@ -10,6 +10,8 @@ import {
   Link as LinkIcon,
   MessageSquare,
   Zap,
+  FileText,
+  Highlighter,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "@/lib/constants";
@@ -22,6 +24,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Link: LinkIcon,
   MessageSquare,
   Zap,
+  FileText,
+  Highlighter,
 };
 
 export function Sidebar() {

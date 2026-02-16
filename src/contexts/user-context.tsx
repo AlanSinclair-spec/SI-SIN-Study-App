@@ -1,72 +1,186 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
-import type { User } from "@/lib/types";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  type ReactNode,
+} from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  displayName: string;
+}
 
 interface UserContextType {
-  currentUser: User | null;
-  users: User[];
-  setCurrentUser: (user: User) => void;
-  refreshUsers: () => Promise<void>;
-  addUser: (name: string) => Promise<User>;
+  user: AuthUser | null;
+  loading: boolean;
+  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signUp: (
+    email: string,
+    password: string,
+    displayName: string
+  ) => Promise<{ error: string | null }>;
+  signOut: () => Promise<void>;
+  updateProfile: (displayName: string) => Promise<void>;
 }
 
 const UserContext = createContext<UserContextType | null>(null);
 
+function mapSupabaseUser(
+  supabaseUser: { id: string; email?: string; user_metadata?: Record<string, unknown> },
+  profileName?: string | null
+): AuthUser {
+  return {
+    id: supabaseUser.id,
+    email: supabaseUser.email ?? "",
+    displayName:
+      profileName ??
+      (supabaseUser.user_metadata?.display_name as string) ??
+      supabaseUser.email ??
+      "",
+  };
+}
+
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [currentUser, setCurrentUserState] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
+  const router = useRouter();
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const refreshUsers = useCallback(async () => {
-    const res = await fetch("/api/users");
-    if (res.ok) {
-      const data = await res.json();
-      setUsers(data);
-    }
-  }, []);
+  const supabase = createClient();
 
+  const fetchProfile = useCallback(
+    async (userId: string): Promise<string | null> => {
+      try {
+        const { data } = await supabase
+          .from("users")
+          .select("display_name")
+          .eq("id", userId)
+          .single();
+        return data?.display_name ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [supabase]
+  );
+
+  // Load initial session
   useEffect(() => {
-    refreshUsers().then(() => {
-      // Restore last selected user from localStorage
-      const savedId = localStorage.getItem("currentUserId");
-      if (savedId) {
-        fetch("/api/users").then(r => r.json()).then((allUsers: User[]) => {
-          const saved = allUsers.find((u: User) => u.id === Number(savedId));
-          if (saved) setCurrentUserState(saved);
-          else if (allUsers.length > 0) setCurrentUserState(allUsers[0]);
-        });
+    const loadUser = async () => {
+      try {
+        const {
+          data: { user: supabaseUser },
+        } = await supabase.auth.getUser();
+
+        if (supabaseUser) {
+          const profileName = await fetchProfile(supabaseUser.id);
+          setUser(mapSupabaseUser(supabaseUser, profileName));
+        }
+      } catch {
+        // No active session
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUser();
+  }, [supabase, fetchProfile]);
+
+  // Listen for auth state changes
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (
+        event === "SIGNED_IN" ||
+        event === "TOKEN_REFRESHED"
+      ) {
+        if (session?.user) {
+          const profileName = await fetchProfile(session.user.id);
+          setUser(mapSupabaseUser(session.user, profileName));
+        }
+      } else if (event === "SIGNED_OUT") {
+        setUser(null);
       }
     });
-  }, [refreshUsers]);
 
-  // Once users load, auto-select if none selected
-  useEffect(() => {
-    if (!currentUser && users.length > 0) {
-      const savedId = localStorage.getItem("currentUserId");
-      const saved = savedId ? users.find(u => u.id === Number(savedId)) : null;
-      setCurrentUserState(saved || users[0]);
-    }
-  }, [users, currentUser]);
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase, fetchProfile]);
 
-  const setCurrentUser = useCallback((user: User) => {
-    setCurrentUserState(user);
-    localStorage.setItem("currentUserId", String(user.id));
-  }, []);
+  const signIn = useCallback(
+    async (
+      email: string,
+      password: string
+    ): Promise<{ error: string | null }> => {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) {
+        return { error: error.message };
+      }
+      return { error: null };
+    },
+    [supabase]
+  );
 
-  const addUser = useCallback(async (name: string): Promise<User> => {
-    const res = await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    const newUser = await res.json();
-    await refreshUsers();
-    setCurrentUser(newUser);
-    return newUser;
-  }, [refreshUsers, setCurrentUser]);
+  const signUp = useCallback(
+    async (
+      email: string,
+      password: string,
+      displayName: string
+    ): Promise<{ error: string | null }> => {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            display_name: displayName,
+          },
+        },
+      });
+      if (error) {
+        return { error: error.message };
+      }
+      return { error: null };
+    },
+    [supabase]
+  );
+
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    router.push("/login");
+  }, [supabase, router]);
+
+  const updateProfile = useCallback(
+    async (displayName: string) => {
+      if (!user) return;
+
+      await supabase
+        .from("users")
+        .update({ display_name: displayName })
+        .eq("id", user.id);
+
+      setUser((prev) =>
+        prev ? { ...prev, displayName } : null
+      );
+    },
+    [supabase, user]
+  );
 
   return (
-    <UserContext.Provider value={{ currentUser, users, setCurrentUser, refreshUsers, addUser }}>
+    <UserContext.Provider
+      value={{ user, loading, signIn, signUp, signOut, updateProfile }}
+    >
       {children}
     </UserContext.Provider>
   );

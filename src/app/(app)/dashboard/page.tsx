@@ -9,11 +9,9 @@ import {
   HelpCircle,
   Target,
   Flame,
-  Trophy,
   BookOpen,
   TrendingUp,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 interface Stats {
   user_name: string;
@@ -28,44 +26,55 @@ interface Stats {
   total_study_sessions: number;
   weak_concepts: Array<{
     title: string;
-    id: number;
+    id: string;
     miss_count: number;
     chapter_title: string;
     book_title: string;
   }>;
 }
 
-interface LeaderboardEntry {
-  user_id: number;
-  user_name: string;
-  composite_score: number;
-  total_reviews: number;
-  flashcard_accuracy: number;
-  total_quizzes: number;
-  avg_quiz_score: number;
-}
-
 export default function DashboardPage() {
-  const { currentUser } = useUser();
+  const { user, loading } = useUser();
   const [stats, setStats] = useState<Stats | null>(null);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 
   useEffect(() => {
-    if (!currentUser) return;
-    fetch(`/api/stats?userId=${currentUser.id}`)
+    if (!user) return;
+    fetch("/api/stats")
       .then((r) => r.json())
       .then(setStats);
-    fetch("/api/stats/leaderboard")
-      .then((r) => r.json())
-      .then(setLeaderboard);
-  }, [currentUser]);
+  }, [user]);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-64 bg-muted rounded animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-24 bg-muted rounded-lg animate-pulse" />
+          ))}
+        </div>
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="h-48 bg-muted rounded-lg animate-pulse" />
+          <div className="h-48 bg-muted rounded-lg animate-pulse" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-muted-foreground">Please sign in to view your dashboard.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">
-            {stats ? `Welcome back, ${stats.user_name}` : "Dashboard"}
+            {stats ? `Welcome back, ${stats.user_name}` : `Welcome back, ${user.displayName}`}
           </h1>
           <p className="text-muted-foreground mt-0.5">Track your study progress.</p>
         </div>
@@ -154,51 +163,18 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Leaderboard */}
+        {/* Study tips instead of leaderboard */}
         <div className="rounded-lg border border-border bg-card p-5">
           <div className="flex items-center gap-2 mb-4">
-            <Trophy className="w-5 h-5 text-yellow-400" />
-            <h2 className="font-semibold">Leaderboard</h2>
+            <TrendingUp className="w-5 h-5 text-green-400" />
+            <h2 className="font-semibold">Study Tips</h2>
           </div>
-          {leaderboard.length > 0 ? (
-            <div className="space-y-3">
-              {leaderboard.map((entry, i) => (
-                <div
-                  key={entry.user_id}
-                  className={cn(
-                    "flex items-center gap-3 p-2 rounded-md",
-                    currentUser?.id === entry.user_id && "bg-accent/50"
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
-                      i === 0 && "bg-yellow-500/20 text-yellow-400",
-                      i === 1 && "bg-gray-400/20 text-gray-400",
-                      i === 2 && "bg-orange-500/20 text-orange-400",
-                      i > 2 && "bg-muted text-muted-foreground"
-                    )}
-                  >
-                    {i + 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{entry.user_name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {entry.total_reviews} reviews · {entry.total_quizzes} quizzes
-                    </p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold">{entry.composite_score}</p>
-                    <p className="text-[10px] text-muted-foreground">pts</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Start studying to appear on the leaderboard!
-            </p>
-          )}
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p>Review flashcards daily to build long-term retention with spaced repetition.</p>
+            <p>Take quizzes after each chapter to identify weak areas early.</p>
+            <p>Use the AI Tutor to explore connections between concepts from both books.</p>
+            <p>Aim for at least one Daily Session per day to maintain your streak.</p>
+          </div>
         </div>
       </div>
 

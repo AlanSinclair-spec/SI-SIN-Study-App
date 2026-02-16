@@ -1,14 +1,11 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getBooks, getChaptersByBook } from "@/data/content";
 
 export async function GET() {
-  const db = getDb();
-  const books = db
-    .prepare(
-      `SELECT b.*,
-        (SELECT COUNT(*) FROM chapters WHERE book_id = b.id) as chapter_count
-       FROM books b ORDER BY b.id`
-    )
-    .all();
-  return NextResponse.json(books);
+  const books = getBooks();
+  const booksWithChapterCount = books.map((book) => ({
+    ...book,
+    chapter_count: getChaptersByBook(book.ref).length,
+  }));
+  return NextResponse.json(booksWithChapterCount);
 }

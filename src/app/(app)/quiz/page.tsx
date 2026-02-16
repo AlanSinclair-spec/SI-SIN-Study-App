@@ -6,16 +6,16 @@ import { useUser } from "@/contexts/user-context";
 import { HelpCircle } from "lucide-react";
 
 interface BookOption {
-  id: number;
+  ref: string;
   title: string;
   slug: string;
 }
 
 export default function QuizConfigPage() {
-  const { currentUser } = useUser();
+  const { user, loading } = useUser();
   const router = useRouter();
   const [books, setBooks] = useState<BookOption[]>([]);
-  const [bookId, setBookId] = useState<string>("");
+  const [bookRef, setBookRef] = useState<string>("");
   const [quizType, setQuizType] = useState("mixed");
   const [questionCount, setQuestionCount] = useState(10);
   const [starting, setStarting] = useState(false);
@@ -27,25 +27,47 @@ export default function QuizConfigPage() {
   }, []);
 
   const startQuiz = async () => {
-    if (!currentUser) return;
+    if (!user) return;
     setStarting(true);
 
     const res = await fetch("/api/quiz/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: currentUser.id,
-        bookId: bookId || undefined,
+        bookRef: bookRef || undefined,
         quizType,
         count: questionCount,
       }),
     });
 
     const data = await res.json();
-    // Store quiz data in sessionStorage for the quiz session page
-    sessionStorage.setItem("activeQuiz", JSON.stringify(data));
+    // The generate endpoint returns { questions }; add bookRef for submission
+    const quizData = {
+      ...data,
+      quizId: `quiz-${Date.now()}`,
+      bookRef: bookRef || "cross",
+    };
+    sessionStorage.setItem("activeQuiz", JSON.stringify(quizData));
     router.push("/quiz/session");
   };
+
+  if (loading) {
+    return (
+      <div className="max-w-lg mx-auto space-y-6">
+        <div className="h-12 w-12 bg-muted rounded-lg animate-pulse mx-auto" />
+        <div className="h-8 w-48 bg-muted rounded animate-pulse mx-auto" />
+        <div className="h-64 bg-muted rounded-lg animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-muted-foreground">Please sign in to take a quiz.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
@@ -64,13 +86,13 @@ export default function QuizConfigPage() {
         <div className="space-y-2">
           <label className="text-sm font-medium">Book</label>
           <select
-            value={bookId}
-            onChange={(e) => setBookId(e.target.value)}
+            value={bookRef}
+            onChange={(e) => setBookRef(e.target.value)}
             className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-ring"
           >
             <option value="">Both Books (Cross-Book)</option>
             {books.map((book) => (
-              <option key={book.id} value={book.id}>
+              <option key={book.ref} value={book.ref}>
                 {book.title}
               </option>
             ))}
@@ -112,7 +134,7 @@ export default function QuizConfigPage() {
 
         <button
           onClick={startQuiz}
-          disabled={starting || !currentUser}
+          disabled={starting}
           className="w-full px-4 py-2.5 rounded-md bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {starting ? "Generating Quiz..." : "Start Quiz"}

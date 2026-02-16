@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { searchContent } from "@/data/content";
 
 interface TutorContext {
   difficulty: "beginner" | "intermediate" | "advanced";
@@ -55,63 +55,30 @@ CONVERSATION GUIDELINES:
 }
 
 export function loadBookContext(topic?: string): string {
-  const db = getDb();
-
   if (!topic) {
-    // Load a general overview
-    const concepts = db
-      .prepare(
-        `SELECT c.title, c.description, ch.title as chapter_title, b.title as book_title
-         FROM concepts c
-         JOIN chapters ch ON c.chapter_id = ch.id
-         JOIN books b ON ch.book_id = b.id
-         WHERE c.importance = 'core'
-         ORDER BY b.id, ch.number
-         LIMIT 30`
-      )
-      .all() as Array<{
-      title: string;
-      description: string;
-      chapter_title: string;
-      book_title: string;
-    }>;
+    // Load a general overview from static content using a broad search
+    const results = searchContent("technology");
+    const coreResults = results.slice(0, 30);
 
-    return concepts
-      .map(
-        (c) =>
-          `[${c.book_title} — ${c.chapter_title}] ${c.title}: ${c.description}`
-      )
+    if (coreResults.length === 0) {
+      return "";
+    }
+
+    return coreResults
+      .map((c) => `[${c.bookRef} — ${c.chapterRef ?? ""}] ${c.title}: ${c.text}`)
       .join("\n\n");
   }
 
   // Search for relevant concepts based on topic
-  const searchTerm = `%${topic}%`;
-  const concepts = db
-    .prepare(
-      `SELECT c.title, c.description, ch.title as chapter_title, b.title as book_title
-       FROM concepts c
-       JOIN chapters ch ON c.chapter_id = ch.id
-       JOIN books b ON ch.book_id = b.id
-       WHERE c.title LIKE ? OR c.description LIKE ?
-       ORDER BY c.importance = 'core' DESC
-       LIMIT 15`
-    )
-    .all(searchTerm, searchTerm) as Array<{
-    title: string;
-    description: string;
-    chapter_title: string;
-    book_title: string;
-  }>;
+  const results = searchContent(topic);
 
-  if (concepts.length === 0) {
+  if (results.length === 0) {
     return loadBookContext(); // Fall back to general overview
   }
 
-  return concepts
-    .map(
-      (c) =>
-        `[${c.book_title} — ${c.chapter_title}] ${c.title}: ${c.description}`
-    )
+  return results
+    .slice(0, 15)
+    .map((c) => `[${c.bookRef} — ${c.chapterRef ?? ""}] ${c.title}: ${c.text}`)
     .join("\n\n");
 }
 

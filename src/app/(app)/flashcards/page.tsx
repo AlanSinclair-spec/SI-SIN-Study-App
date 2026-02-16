@@ -12,19 +12,19 @@ interface DeckStats {
 }
 
 interface BookDeck {
-  id: number;
+  ref: string;
   title: string;
   slug: string;
   total: number;
 }
 
 export default function FlashcardsPage() {
-  const { currentUser } = useUser();
+  const { user, loading } = useUser();
   const [stats, setStats] = useState<DeckStats>({ total: 0, due: 0, reviewed: 0 });
   const [books, setBooks] = useState<BookDeck[]>([]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!user) return;
 
     // Get total flashcards
     fetch("/api/flashcards")
@@ -34,7 +34,7 @@ export default function FlashcardsPage() {
       });
 
     // Get due cards count
-    fetch(`/api/flashcards/due?userId=${currentUser.id}&limit=999`)
+    fetch("/api/flashcards/due?limit=999")
       .then((r) => r.json())
       .then((due: unknown[]) => {
         setStats((prev) => ({
@@ -47,8 +47,50 @@ export default function FlashcardsPage() {
     // Get books for filtering
     fetch("/api/books")
       .then((r) => r.json())
-      .then(setBooks);
-  }, [currentUser]);
+      .then((booksData: Array<{ ref: string; title: string; slug: string }>) => {
+        // Enrich with flashcard count per book
+        const enriched = booksData.map((book) => ({
+          ref: book.ref,
+          title: book.title,
+          slug: book.slug,
+          total: 0,
+        }));
+        setBooks(enriched);
+        // Get per-book counts
+        for (const book of enriched) {
+          fetch(`/api/flashcards?bookRef=${book.ref}`)
+            .then((r) => r.json())
+            .then((cards: unknown[]) => {
+              setBooks((prev) =>
+                prev.map((b) =>
+                  b.ref === book.ref ? { ...b, total: cards.length } : b
+                )
+              );
+            });
+        }
+      });
+  }, [user]);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-48 bg-muted rounded animate-pulse" />
+        <div className="grid grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-24 bg-muted rounded-lg animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-muted-foreground">Please sign in to review flashcards.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -96,7 +138,7 @@ export default function FlashcardsPage() {
         <h2 className="text-lg font-semibold">Decks by Book</h2>
         {books.map((book) => (
           <div
-            key={book.id}
+            key={book.ref}
             className="flex items-center justify-between rounded-lg border border-border bg-card p-4"
           >
             <div className="flex items-center gap-3">
@@ -111,7 +153,7 @@ export default function FlashcardsPage() {
               </div>
             </div>
             <Link
-              href={`/flashcards/review?bookId=${book.id}`}
+              href={`/flashcards/review?bookRef=${book.ref}`}
               className="text-sm text-primary hover:underline"
             >
               Study
