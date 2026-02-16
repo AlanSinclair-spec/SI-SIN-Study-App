@@ -1,28 +1,56 @@
-import { getDb } from "@/lib/db";
 import { buildSystemPrompt, loadBookContext, streamTutorResponse } from "@/lib/ai";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
+import type { Json } from "@/lib/supabase-types";
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
 
 export async function POST(request: Request) {
-  const { userId, conversationId, message, difficulty = "intermediate" } = await request.json();
+  const body = await request.json() as {
+    conversationId?: string;
+    message?: string;
+    difficulty?: "beginner" | "intermediate" | "advanced";
+  };
 
-  if (!userId || !message) {
-    return new Response(JSON.stringify({ error: "userId and message required" }), {
+  const { conversationId, message, difficulty = "intermediate" } = body;
+
+  if (!message) {
+    return new Response(JSON.stringify({ error: "message is required" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  const db = getDb();
+  const supabase = await createServerSupabaseClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-  // Load or create conversation
-  let conversation: { id: number; messages: string } | undefined;
-  if (conversationId) {
-    conversation = db
-      .prepare("SELECT id, messages FROM tutor_conversations WHERE id = ? AND user_id = ?")
-      .get(conversationId, Number(userId)) as { id: number; messages: string } | undefined;
+  if (authError || !user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
-  const existingMessages: Array<{ role: "user" | "assistant"; content: string }> =
-    conversation ? JSON.parse(conversation.messages) : [];
+  // Load or create conversation
+  let conversation: { id: string; messages: Json } | null = null;
+  if (conversationId) {
+    const { data } = await supabase
+      .from("tutor_conversations")
+      .select("id, messages")
+      .eq("id", conversationId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (data) {
+      conversation = data;
+    }
+  }
+
+  const existingMessages: ChatMessage[] = conversation
+    ? (conversation.messages as unknown as ChatMessage[])
+    : [];
 
   // Add user message
   existingMessages.push({
@@ -33,24 +61,36 @@ export async function POST(request: Request) {
   // Build context
   const bookContext = loadBookContext(message);
 
-  // Get student weak areas from quiz history
-  const weakAreas = db
-    .prepare(
-      `SELECT c.title, COUNT(*) as wrong_count
-       FROM quiz_answers qa
-       JOIN quiz_questions qq ON qa.question_id = qq.id
-       JOIN concepts c ON qq.concept_id = c.id
-       WHERE qa.is_correct = 0
-       AND qa.quiz_id IN (SELECT id FROM quizzes WHERE user_id = ?)
-       GROUP BY c.id
-       ORDER BY wrong_count DESC
-       LIMIT 5`
-    )
-    .all(Number(userId)) as Array<{ title: string; wrong_count: number }>;
+  // Get student weak areas from quiz results
+  let weakAreasText: string | undefined;
+  const { data: quizResults } = await supabase
+    .from("quiz_results")
+    .select("answers, book")
+    .eq("user_id", user.id);
 
-  const weakAreasText = weakAreas.length > 0
-    ? weakAreas.map((w) => `- ${w.title} (missed ${w.wrong_count} times)`).join("\n")
-    : undefined;
+  if (quizResults && quizResults.length > 0) {
+    const wrongCounts: Record<string, number> = {};
+    for (const qr of quizResults) {
+      const answers = qr.answers as Json;
+      if (!Array.isArray(answers)) continue;
+      for (const rawAnswer of answers) {
+        const answer = rawAnswer as Record<string, Json>;
+        if (answer && answer.isCorrect === false) {
+          const questionId = String(answer.questionId ?? "unknown");
+          wrongCounts[questionId] = (wrongCounts[questionId] ?? 0) + 1;
+        }
+      }
+    }
+
+    const weakAreas = Object.entries(wrongCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([qId, count]) => `- Question ${qId} (missed ${count} times)`);
+
+    if (weakAreas.length > 0) {
+      weakAreasText = weakAreas.join("\n");
+    }
+  }
 
   const systemPrompt = buildSystemPrompt({
     difficulty,
@@ -94,7 +134,9 @@ export async function POST(request: Request) {
               if (!trimmed.startsWith("data: ")) continue;
 
               try {
-                const data = JSON.parse(trimmed.slice(6));
+                const data = JSON.parse(trimmed.slice(6)) as {
+                  choices?: Array<{ delta?: { content?: string } }>;
+                };
                 const content = data.choices?.[0]?.delta?.content;
                 if (content) {
                   fullResponse += content;
@@ -111,7 +153,9 @@ export async function POST(request: Request) {
           // Process any remaining buffer
           if (buffer.trim() && buffer.trim() !== "data: [DONE]" && buffer.trim().startsWith("data: ")) {
             try {
-              const data = JSON.parse(buffer.trim().slice(6));
+              const data = JSON.parse(buffer.trim().slice(6)) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+              };
               const content = data.choices?.[0]?.delta?.content;
               if (content) {
                 fullResponse += content;
@@ -130,28 +174,40 @@ export async function POST(request: Request) {
             content: fullResponse,
           });
 
-          const messagesJson = JSON.stringify(existingMessages);
+          const messagesJson = existingMessages as unknown as Json;
+
+          let savedConversationId = conversation?.id;
 
           if (conversation) {
-            db.prepare(
-              "UPDATE tutor_conversations SET messages = ?, updated_at = datetime('now') WHERE id = ?"
-            ).run(messagesJson, conversation.id);
+            await supabase
+              .from("tutor_conversations")
+              .update({
+                messages: messagesJson,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", conversation.id);
           } else {
-            const result = db
-              .prepare(
-                "INSERT INTO tutor_conversations (user_id, difficulty, topic, messages) VALUES (?, ?, ?, ?)"
-              )
-              .run(Number(userId), difficulty, message.slice(0, 100), messagesJson);
-            conversation = { id: Number(result.lastInsertRowid), messages: messagesJson };
+            const { data: newConv } = await supabase
+              .from("tutor_conversations")
+              .insert({
+                user_id: user.id,
+                difficulty,
+                topic: message.slice(0, 100),
+                messages: messagesJson,
+              })
+              .select("id")
+              .single();
+
+            savedConversationId = newConv?.id;
           }
 
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ done: true, conversationId: conversation.id })}\n\n`
+              `data: ${JSON.stringify({ done: true, conversationId: savedConversationId })}\n\n`
             )
           );
           controller.close();
-        } catch (err) {
+        } catch (_err) {
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({ error: "Stream error" })}\n\n`

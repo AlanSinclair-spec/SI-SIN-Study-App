@@ -1,45 +1,81 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { searchContent } from "@/data/content";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
+
+interface SearchResult {
+  type: string;
+  title: string;
+  text: string;
+  bookRef?: string;
+  chapterRef?: string;
+  book?: string;
+  chapter?: number;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q");
+
   if (!q || q.length < 2) {
     return NextResponse.json([]);
   }
 
-  const db = getDb();
-  const term = `%${q}%`;
+  // Search static content (concepts, quotes, flashcards)
+  const contentResults: SearchResult[] = searchContent(q).map((r) => ({
+    type: r.type,
+    title: r.title,
+    text: r.text,
+    bookRef: r.bookRef,
+    chapterRef: r.chapterRef,
+  }));
 
-  const results = db
-    .prepare(
-      `SELECT 'concept' as type, c.id, c.title, c.description, ch.title as chapter_title, b.title as book_title
-       FROM concepts c
-       JOIN chapters ch ON c.chapter_id = ch.id
-       JOIN books b ON ch.book_id = b.id
-       WHERE c.title LIKE ?1 OR c.description LIKE ?1
+  // Optionally search user's notes and highlights if authenticated
+  try {
+    const supabase = await createServerSupabaseClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
-       UNION ALL
+    if (user) {
+      const searchPattern = `%${q}%`;
 
-       SELECT 'flashcard' as type, f.id, f.front as title, f.back as description,
-              COALESCE(ch.title, '') as chapter_title, b.title as book_title
-       FROM flashcards f
-       JOIN books b ON f.book_id = b.id
-       LEFT JOIN chapters ch ON f.chapter_id = ch.id
-       WHERE f.front LIKE ?1 OR f.back LIKE ?1
+      // Search notes
+      const { data: notes } = await supabase
+        .from("notes")
+        .select("content, book, chapter, tags")
+        .eq("user_id", user.id)
+        .ilike("content", searchPattern)
+        .limit(10);
 
-       UNION ALL
+      for (const note of notes ?? []) {
+        contentResults.push({
+          type: "note",
+          title: `Note - ${note.book} Ch.${note.chapter}`,
+          text: note.content,
+          book: note.book,
+          chapter: note.chapter,
+        });
+      }
 
-       SELECT 'quote' as type, q.id, SUBSTR(q.text, 1, 80) as title, q.text as description,
-              ch.title as chapter_title, b.title as book_title
-       FROM quotes q
-       JOIN chapters ch ON q.chapter_id = ch.id
-       JOIN books b ON ch.book_id = b.id
-       WHERE q.text LIKE ?1
+      // Search highlights
+      const { data: highlights } = await supabase
+        .from("highlights")
+        .select("highlighted_text, note, book, chapter")
+        .eq("user_id", user.id)
+        .ilike("highlighted_text", searchPattern)
+        .limit(10);
 
-       LIMIT 20`
-    )
-    .all(term);
+      for (const highlight of highlights ?? []) {
+        contentResults.push({
+          type: "highlight",
+          title: `Highlight - ${highlight.book} Ch.${highlight.chapter}`,
+          text: highlight.highlighted_text,
+          book: highlight.book,
+          chapter: highlight.chapter,
+        });
+      }
+    }
+  } catch {
+    // Not authenticated or Supabase unavailable -- just return static results
+  }
 
-  return NextResponse.json(results);
+  return NextResponse.json(contentResults.slice(0, 20));
 }

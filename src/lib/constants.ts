@@ -8,6 +8,8 @@ export const NAV_ITEMS = [
   { href: "/connections", label: "Connections", icon: "Link" },
   { href: "/tutor", label: "AI Tutor", icon: "MessageSquare" },
   { href: "/daily", label: "Daily Session", icon: "Zap" },
+  { href: "/notes", label: "Notes", icon: "FileText" },
+  { href: "/highlights", label: "Highlights", icon: "Highlighter" },
 ] as const;
 
 export const DIFFICULTY_COLORS = {

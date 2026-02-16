@@ -1,72 +1,78 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
+import type { Json } from "@/lib/supabase-types";
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const userId = searchParams.get("userId");
+export async function GET() {
+  const supabase = await createServerSupabaseClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-  if (!userId) {
-    return NextResponse.json({ error: "userId required" }, { status: 400 });
+  if (authError || !user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const db = getDb();
-  const uid = Number(userId);
+  // Flashcard stats from flashcard_progress
+  const { data: flashcardRows } = await supabase
+    .from("flashcard_progress")
+    .select("flashcard_id, last_quality, updated_at")
+    .eq("user_id", user.id);
 
-  // Flashcard stats
-  const flashcardStats = db
-    .prepare(
-      `SELECT
-        COUNT(*) as total_reviews,
-        ROUND(AVG(CASE WHEN quality >= 3 THEN 1.0 ELSE 0.0 END) * 100, 1) as accuracy,
-        COUNT(DISTINCT flashcard_id) as unique_cards
-       FROM flashcard_reviews WHERE user_id = ?`
-    )
-    .get(uid) as { total_reviews: number; accuracy: number; unique_cards: number };
+  const totalReviews = flashcardRows?.length ?? 0;
+  const uniqueCards = totalReviews;
+  const accurateReviews = (flashcardRows ?? []).filter(
+    (r) => r.last_quality !== null && r.last_quality >= 3
+  ).length;
+  const flashcardAccuracy = totalReviews > 0
+    ? Math.round((accurateReviews / totalReviews) * 1000) / 10
+    : 0;
 
-  // Quiz stats
-  const quizStats = db
-    .prepare(
-      `SELECT
-        COUNT(*) as total_quizzes,
-        ROUND(AVG(score), 1) as avg_score,
-        MAX(score) as best_score
-       FROM quizzes WHERE user_id = ? AND completed_at IS NOT NULL`
-    )
-    .get(uid) as { total_quizzes: number; avg_score: number; best_score: number };
+  // Quiz stats from quiz_results
+  const { data: quizRows } = await supabase
+    .from("quiz_results")
+    .select("score, completed_at")
+    .eq("user_id", user.id);
 
-  // Study streak (consecutive days with activity)
-  const recentSessions = db
-    .prepare(
-      `SELECT DISTINCT date(started_at) as study_date
-       FROM study_sessions WHERE user_id = ?
-       UNION
-       SELECT DISTINCT date(reviewed_at) as study_date
-       FROM flashcard_reviews WHERE user_id = ?
-       UNION
-       SELECT DISTINCT date(started_at) as study_date
-       FROM quizzes WHERE user_id = ?
-       ORDER BY study_date DESC
-       LIMIT 365`
-    )
-    .all(uid, uid, uid) as Array<{ study_date: string }>;
+  const totalQuizzes = quizRows?.length ?? 0;
+  const avgQuizScore = totalQuizzes > 0
+    ? Math.round(
+        ((quizRows ?? []).reduce((sum, q) => sum + q.score, 0) / totalQuizzes) * 10
+      ) / 10
+    : 0;
+  const bestQuizScore = totalQuizzes > 0
+    ? Math.max(...(quizRows ?? []).map((q) => q.score))
+    : 0;
 
+  // Study streak -- gather unique activity dates from quiz_results and flashcard_progress
+  const activityDates = new Set<string>();
+
+  for (const q of quizRows ?? []) {
+    if (q.completed_at) {
+      activityDates.add(q.completed_at.split("T")[0]);
+    }
+  }
+  for (const f of flashcardRows ?? []) {
+    if (f.updated_at) {
+      activityDates.add(f.updated_at.split("T")[0]);
+    }
+  }
+
+  const sortedDates = Array.from(activityDates).sort().reverse();
   let streak = 0;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  for (let i = 0; i < recentSessions.length; i++) {
+  for (let i = 0; i < sortedDates.length; i++) {
     const expectedDate = new Date(today);
     expectedDate.setDate(expectedDate.getDate() - i);
     const expected = expectedDate.toISOString().split("T")[0];
 
-    if (recentSessions[i].study_date === expected) {
+    if (sortedDates[i] === expected) {
       streak++;
-    } else if (i === 0 && recentSessions[0]?.study_date !== expected) {
-      // No activity today - check if yesterday started the streak
+    } else if (i === 0 && sortedDates[0] !== expected) {
+      // No activity today -- check if yesterday started the streak
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = yesterday.toISOString().split("T")[0];
-      if (recentSessions[0]?.study_date === yesterdayStr) {
+      if (sortedDates[0] === yesterdayStr) {
         streak = 1;
         continue;
       }
@@ -76,58 +82,62 @@ export async function GET(request: Request) {
     }
   }
 
-  // Chapters studied (has at least one flashcard review or quiz for that chapter)
-  const chaptersStudied = db
-    .prepare(
-      `SELECT COUNT(DISTINCT chapter_id) as count FROM (
-        SELECT f.chapter_id FROM flashcard_reviews fr
-        JOIN flashcards f ON fr.flashcard_id = f.id
-        WHERE fr.user_id = ? AND f.chapter_id IS NOT NULL
-        UNION
-        SELECT q.chapter_id FROM quizzes q
-        WHERE q.user_id = ? AND q.chapter_id IS NOT NULL
-      )`
-    )
-    .get(uid, uid) as { count: number };
+  // Chapters studied from study_progress
+  const { count: chaptersStudied } = await supabase
+    .from("study_progress")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("status", "completed");
 
-  // Total study sessions
-  const sessionCount = db
-    .prepare("SELECT COUNT(*) as count FROM study_sessions WHERE user_id = ?")
-    .get(uid) as { count: number };
+  // Total notes
+  const { count: notesCount } = await supabase
+    .from("notes")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
 
-  // Weak concepts (most missed in quizzes)
-  const weakConcepts = db
-    .prepare(
-      `SELECT c.title, c.id, COUNT(*) as miss_count,
-              ch.title as chapter_title, b.title as book_title
-       FROM quiz_answers qa
-       JOIN quiz_questions qq ON qa.question_id = qq.id
-       JOIN concepts c ON qq.concept_id = c.id
-       JOIN chapters ch ON c.chapter_id = ch.id
-       JOIN books b ON ch.book_id = b.id
-       WHERE qa.is_correct = 0
-       AND qa.quiz_id IN (SELECT id FROM quizzes WHERE user_id = ?)
-       GROUP BY c.id
-       ORDER BY miss_count DESC
-       LIMIT 5`
-    )
-    .all(uid);
+  // Weak concepts: look at quiz_results answers for incorrect answers, aggregate
+  const { data: quizResultsWithAnswers } = await supabase
+    .from("quiz_results")
+    .select("answers, book, chapter")
+    .eq("user_id", user.id);
 
-  // Recent activity
-  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(uid) as { name: string };
+  const wrongByChapter: Record<string, { book: string; chapter: number | null; count: number }> = {};
+  for (const qr of quizResultsWithAnswers ?? []) {
+    const answers = qr.answers as Json;
+    if (!Array.isArray(answers)) continue;
+    for (const rawAnswer of answers) {
+      const answer = rawAnswer as Record<string, Json>;
+      if (answer && answer.isCorrect === false) {
+        const key = `${qr.book}-${qr.chapter ?? "all"}`;
+        if (!wrongByChapter[key]) {
+          wrongByChapter[key] = { book: qr.book, chapter: qr.chapter, count: 0 };
+        }
+        wrongByChapter[key].count++;
+      }
+    }
+  }
+
+  const weakConcepts = Object.values(wrongByChapter)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((w) => ({
+      book: w.book,
+      chapter: w.chapter,
+      miss_count: w.count,
+    }));
 
   return NextResponse.json({
-    user_id: uid,
-    user_name: user?.name || "Unknown",
-    total_flashcards_reviewed: flashcardStats.total_reviews,
-    unique_cards_reviewed: flashcardStats.unique_cards,
-    flashcard_accuracy: flashcardStats.accuracy || 0,
-    total_quizzes_taken: quizStats.total_quizzes,
-    avg_quiz_score: quizStats.avg_score || 0,
-    best_quiz_score: quizStats.best_score || 0,
+    user_id: user.id,
+    user_name: user.user_metadata?.display_name ?? user.email ?? "Unknown",
+    total_flashcards_reviewed: totalReviews,
+    unique_cards_reviewed: uniqueCards,
+    flashcard_accuracy: flashcardAccuracy,
+    total_quizzes_taken: totalQuizzes,
+    avg_quiz_score: avgQuizScore,
+    best_quiz_score: bestQuizScore,
     study_streak: streak,
-    chapters_studied: chaptersStudied.count,
-    total_study_sessions: sessionCount.count,
+    chapters_studied: chaptersStudied ?? 0,
+    total_notes: notesCount ?? 0,
     weak_concepts: weakConcepts,
   });
 }

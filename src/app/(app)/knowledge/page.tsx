@@ -5,7 +5,7 @@ import Link from "next/link";
 import { BookOpen, ChevronRight } from "lucide-react";
 
 interface BookWithCount {
-  id: number;
+  ref: string;
   title: string;
   author: string;
   slug: string;
@@ -35,7 +35,7 @@ export default function KnowledgePage() {
       <div className="grid gap-4 md:grid-cols-2">
         {books.map((book) => (
           <Link
-            key={book.id}
+            key={book.ref}
             href={`/knowledge/${book.slug}`}
             className="group block rounded-lg border border-border bg-card p-6 hover:border-primary/50 transition-colors"
           >

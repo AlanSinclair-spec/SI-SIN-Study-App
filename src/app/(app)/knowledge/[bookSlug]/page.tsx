@@ -6,21 +6,21 @@ import Link from "next/link";
 import { ArrowLeft, ChevronRight, BookOpen } from "lucide-react";
 
 interface Chapter {
-  id: number;
+  ref: string;
   number: number;
   title: string;
   slug: string;
   summary: string;
-  concept_count: number;
 }
 
 interface BookData {
-  id: number;
+  ref: string;
   title: string;
   author: string;
   slug: string;
   description: string;
   chapters: Chapter[];
+  chapterCount: number;
 }
 
 export default function BookDetailPage() {
@@ -75,7 +75,7 @@ export default function BookDetailPage() {
         <div className="space-y-2">
           {book.chapters.map((chapter) => (
             <Link
-              key={chapter.id}
+              key={chapter.ref}
               href={`/knowledge/${book.slug}/${chapter.slug}`}
               className="group flex items-center justify-between rounded-lg border border-border bg-card p-4 hover:border-primary/50 transition-colors"
             >
@@ -92,9 +92,6 @@ export default function BookDetailPage() {
                       {chapter.summary}
                     </p>
                   )}
-                  <span className="text-xs text-muted-foreground mt-1 inline-block">
-                    {chapter.concept_count} concepts
-                  </span>
                 </div>
               </div>
               <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors flex-shrink-0 ml-2" />

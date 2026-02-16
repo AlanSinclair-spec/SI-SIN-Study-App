@@ -1,16 +1,29 @@
 "use client";
 
-import { Search, Menu } from "lucide-react";
+import { Search, Menu, Sun, Moon } from "lucide-react";
 import { UserSwitcher } from "./user-switcher";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useTheme } from "next-themes";
 import { MobileNav } from "./mobile-nav";
 
 export function Header() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const [searchResults, setSearchResults] = useState<
-    Array<{ type: string; id: number; title: string; description: string; book_title: string; chapter_title: string }>
+    Array<{
+      type: string;
+      title: string;
+      description?: string;
+      text?: string;
+      book_title?: string;
+      chapter_title?: string;
+      bookRef?: string;
+      chapterRef?: string;
+    }>
   >([]);
 
   const handleSearch = async (query: string) => {
@@ -49,7 +62,18 @@ export function Header() {
             </button>
           </div>
         </div>
-        <UserSwitcher />
+        <div className="flex items-center gap-2">
+          {mounted && (
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="p-2 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+          )}
+          <UserSwitcher />
+        </div>
       </header>
 
       {/* Search overlay */}
@@ -85,7 +109,7 @@ export function Header() {
               <div className="max-h-72 overflow-y-auto p-2">
                 {searchResults.map((result, i) => (
                   <a
-                    key={`${result.type}-${result.id}-${i}`}
+                    key={`${result.type}-${i}`}
                     href={
                       result.type === "concept"
                         ? `/knowledge`
@@ -107,7 +131,7 @@ export function Header() {
                       <span className="text-sm font-medium truncate">{result.title}</span>
                     </div>
                     <span className="text-xs text-muted-foreground truncate">
-                      {result.book_title} — {result.chapter_title}
+                      {result.book_title || result.bookRef || ""}{(result.chapter_title || result.chapterRef) ? ` — ${result.chapter_title || result.chapterRef}` : ""}
                     </span>
                   </a>
                 ))}

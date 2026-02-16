@@ -7,36 +7,67 @@ import { ArrowLeft, Check, X, ChevronRight } from "lucide-react";
 import Link from "next/link";
 
 interface Question {
-  id: number;
-  question_type: "multiple_choice" | "short_answer";
-  question_text: string;
-  correct_answer: string;
-  option_a: string | null;
-  option_b: string | null;
-  option_c: string | null;
-  option_d: string | null;
-  explanation: string | null;
+  id: string;
+  questionType: "multiple_choice" | "short_answer";
+  questionText: string;
+  correctAnswer: string;
+  optionA?: string;
+  optionB?: string;
+  optionC?: string;
+  optionD?: string;
+  explanation: string;
   difficulty: string;
+  // Legacy field names (from old API) - support both formats
+  question_type?: string;
+  question_text?: string;
+  correct_answer?: string;
+  option_a?: string;
+  option_b?: string;
+  option_c?: string;
+  option_d?: string;
 }
 
 interface QuizData {
-  quizId: number;
+  quizId: string;
+  bookRef?: string;
   questions: Question[];
 }
 
 interface SubmitResult {
-  questionId: number;
+  questionId: string;
   userAnswer: string;
   correctAnswer: string;
   isCorrect: boolean;
   explanation: string | null;
 }
 
+function getQuestionType(q: Question): "multiple_choice" | "short_answer" {
+  return q.questionType || (q.question_type as "multiple_choice" | "short_answer") || "multiple_choice";
+}
+
+function getQuestionText(q: Question): string {
+  return q.questionText || q.question_text || "";
+}
+
+function getCorrectAnswer(q: Question): string {
+  return q.correctAnswer || q.correct_answer || "";
+}
+
+function getOptions(q: Question): Array<{ key: string; value: string }> {
+  const opts = [
+    { key: "A", value: q.optionA || q.option_a || "" },
+    { key: "B", value: q.optionB || q.option_b || "" },
+    { key: "C", value: q.optionC || q.option_c || "" },
+    { key: "D", value: q.optionD || q.option_d || "" },
+  ];
+  return opts.filter((o) => o.value);
+}
+
 export default function QuizSessionPage() {
   const router = useRouter();
   const [quiz, setQuiz] = useState<QuizData | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [selectedOption, setSelectedOption] = useState<string>("");
   const [shortAnswer, setShortAnswer] = useState("");
   const [results, setResults] = useState<SubmitResult[] | null>(null);
@@ -55,13 +86,11 @@ export default function QuizSessionPage() {
 
   const currentQuestion = quiz.questions[currentIndex];
   const isLastQuestion = currentIndex === quiz.questions.length - 1;
+  const qType = getQuestionType(currentQuestion);
+  const qText = getQuestionText(currentQuestion);
 
   const submitAnswer = () => {
-    const answer =
-      currentQuestion.question_type === "multiple_choice"
-        ? selectedOption
-        : shortAnswer;
-
+    const answer = qType === "multiple_choice" ? selectedOption : shortAnswer;
     if (!answer) return;
 
     setAnswers((prev) => ({ ...prev, [currentQuestion.id]: answer }));
@@ -77,32 +106,55 @@ export default function QuizSessionPage() {
     // Submit final answer
     const finalAnswers = {
       ...answers,
-      [currentQuestion.id]:
-        currentQuestion.question_type === "multiple_choice"
-          ? selectedOption
-          : shortAnswer,
+      [currentQuestion.id]: qType === "multiple_choice" ? selectedOption : shortAnswer,
     };
 
-    const answerArray = Object.entries(finalAnswers).map(([qId, answer]) => ({
-      questionId: Number(qId),
-      userAnswer: answer,
-    }));
+    // Build submission with isCorrect computed client-side
+    const questionsWithAnswers = quiz.questions.map((q) => {
+      const userAnswer = finalAnswers[q.id] || "";
+      const correctAns = getCorrectAnswer(q);
+      const isCorrect = userAnswer.trim().toLowerCase() === correctAns.trim().toLowerCase();
+      return {
+        questionId: q.id,
+        userAnswer,
+        isCorrect,
+      };
+    });
 
     const res = await fetch("/api/quiz/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        quizId: quiz.quizId,
-        answers: answerArray,
+        book: quiz.bookRef || "cross",
+        questions: questionsWithAnswers,
       }),
     });
 
     const data = await res.json();
-    setResults(data.results);
+
+    // Build results for display from the submission
+    const displayResults: SubmitResult[] = quiz.questions.map((q) => {
+      const userAnswer = finalAnswers[q.id] || "";
+      const correctAns = getCorrectAnswer(q);
+      const isCorrect = userAnswer.trim().toLowerCase() === correctAns.trim().toLowerCase();
+      return {
+        questionId: q.id,
+        userAnswer,
+        correctAnswer: correctAns,
+        isCorrect,
+        explanation: q.explanation || null,
+      };
+    });
+
+    const correctCount = displayResults.filter((r) => r.isCorrect).length;
+    const totalQ = displayResults.length;
+    const computedScore = totalQ > 0 ? (correctCount / totalQ) * 100 : 0;
+
+    setResults(data.results || displayResults);
     setScore({
-      score: data.score,
-      correctCount: data.correctCount,
-      totalQuestions: data.totalQuestions,
+      score: data.score ?? computedScore,
+      correctCount: data.correctCount ?? correctCount,
+      totalQuestions: data.totalQuestions ?? totalQ,
     });
     sessionStorage.removeItem("activeQuiz");
   };
@@ -151,7 +203,9 @@ export default function QuizSessionPage() {
                     <X className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
                   )}
                   <div className="flex-1">
-                    <p className="text-sm font-medium">{question?.question_text}</p>
+                    <p className="text-sm font-medium">
+                      {question ? getQuestionText(question) : ""}
+                    </p>
                     {!result.isCorrect && (
                       <div className="mt-2 text-sm">
                         <p className="text-red-400">
@@ -192,15 +246,7 @@ export default function QuizSessionPage() {
     );
   }
 
-  const options =
-    currentQuestion.question_type === "multiple_choice"
-      ? [
-          { key: "A", value: currentQuestion.option_a },
-          { key: "B", value: currentQuestion.option_b },
-          { key: "C", value: currentQuestion.option_c },
-          { key: "D", value: currentQuestion.option_d },
-        ].filter((o) => o.value)
-      : [];
+  const options = qType === "multiple_choice" ? getOptions(currentQuestion) : [];
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
@@ -240,16 +286,16 @@ export default function QuizSessionPage() {
         >
           {currentQuestion.difficulty}
         </span>
-        <p className="text-lg font-medium mt-3">{currentQuestion.question_text}</p>
+        <p className="text-lg font-medium mt-3">{qText}</p>
       </div>
 
       {/* Answer input */}
-      {currentQuestion.question_type === "multiple_choice" ? (
+      {qType === "multiple_choice" ? (
         <div className="space-y-2">
           {options.map((opt) => (
             <button
               key={opt.key}
-              onClick={() => setSelectedOption(opt.value!)}
+              onClick={() => setSelectedOption(opt.value)}
               className={cn(
                 "w-full text-left p-3 rounded-lg border transition-colors flex items-center gap-3",
                 selectedOption === opt.value
@@ -284,11 +330,7 @@ export default function QuizSessionPage() {
       {/* Submit button */}
       <button
         onClick={isLastQuestion ? finishQuiz : submitAnswer}
-        disabled={
-          currentQuestion.question_type === "multiple_choice"
-            ? !selectedOption
-            : !shortAnswer.trim()
-        }
+        disabled={qType === "multiple_choice" ? !selectedOption : !shortAnswer.trim()}
         className="w-full px-4 py-2.5 rounded-md bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-2"
       >
         {isLastQuestion ? "Finish Quiz" : "Next Question"}

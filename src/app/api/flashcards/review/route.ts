@@ -1,84 +1,107 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { calculateSM2, DEFAULT_SM2_STATE } from "@/lib/sm2";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
+
+function calculateSM2(
+  quality: number,
+  prevEF: number,
+  prevInterval: number,
+  prevReps: number
+) {
+  let ef = prevEF + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+  if (ef < 1.3) ef = 1.3;
+
+  let interval: number;
+  let reps: number;
+
+  if (quality < 3) {
+    reps = 0;
+    interval = 1;
+  } else {
+    reps = prevReps + 1;
+    if (reps === 1) interval = 1;
+    else if (reps === 2) interval = 6;
+    else interval = Math.round(prevInterval * ef);
+  }
+
+  const nextReview = new Date();
+  nextReview.setDate(nextReview.getDate() + interval);
+
+  return {
+    easinessFactor: ef,
+    intervalDays: interval,
+    repetitions: reps,
+    nextReview: nextReview.toISOString(),
+  };
+}
 
 export async function POST(request: Request) {
-  const { userId, flashcardId, quality } = await request.json();
+  const supabase = await createServerSupabaseClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-  if (!userId || !flashcardId || quality === undefined) {
+  if (authError || !user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await request.json() as { flashcardId?: string; quality?: number };
+  const { flashcardId, quality } = body;
+
+  if (!flashcardId || quality === undefined) {
     return NextResponse.json(
-      { error: "userId, flashcardId, and quality are required" },
+      { error: "flashcardId and quality are required" },
       { status: 400 }
     );
   }
 
-  if (quality < 0 || quality > 5) {
+  if (typeof quality !== "number" || quality < 0 || quality > 5) {
     return NextResponse.json(
-      { error: "Quality must be between 0 and 5" },
+      { error: "Quality must be a number between 0 and 5" },
       { status: 400 }
     );
   }
-
-  const db = getDb();
 
   // Get current state or use defaults
-  const currentState = db
-    .prepare(
-      "SELECT easiness_factor, interval_days, repetitions FROM user_flashcard_state WHERE user_id = ? AND flashcard_id = ?"
-    )
-    .get(Number(userId), Number(flashcardId)) as {
-    easiness_factor: number;
-    interval_days: number;
-    repetitions: number;
-  } | undefined;
+  const { data: currentState } = await supabase
+    .from("flashcard_progress")
+    .select("easiness_factor, interval_days, repetitions")
+    .eq("user_id", user.id)
+    .eq("flashcard_id", flashcardId)
+    .single();
 
-  const sm2Input = currentState
-    ? {
-        easinessFactor: currentState.easiness_factor,
-        intervalDays: currentState.interval_days,
-        repetitions: currentState.repetitions,
-      }
-    : DEFAULT_SM2_STATE;
+  const prevEF = currentState?.easiness_factor ?? 2.5;
+  const prevInterval = currentState?.interval_days ?? 0;
+  const prevReps = currentState?.repetitions ?? 0;
 
-  const result = calculateSM2(quality, sm2Input);
+  const result = calculateSM2(quality, prevEF, prevInterval, prevReps);
 
-  // Upsert user_flashcard_state
-  db.prepare(
-    `INSERT INTO user_flashcard_state (user_id, flashcard_id, easiness_factor, interval_days, repetitions, next_review, last_quality, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(user_id, flashcard_id)
-     DO UPDATE SET easiness_factor = ?, interval_days = ?, repetitions = ?, next_review = ?, last_quality = ?, updated_at = datetime('now')`
-  ).run(
-    Number(userId),
-    Number(flashcardId),
-    result.easinessFactor,
-    result.intervalDays,
-    result.repetitions,
-    result.nextReview,
-    quality,
-    result.easinessFactor,
-    result.intervalDays,
-    result.repetitions,
-    result.nextReview,
-    quality
-  );
+  // Upsert flashcard_progress
+  const { error: upsertError } = await supabase
+    .from("flashcard_progress")
+    .upsert(
+      {
+        user_id: user.id,
+        flashcard_id: flashcardId,
+        easiness_factor: result.easinessFactor,
+        interval_days: result.intervalDays,
+        repetitions: result.repetitions,
+        next_review: result.nextReview,
+        last_quality: quality,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,flashcard_id" }
+    );
 
-  // Insert review audit log
-  db.prepare(
-    `INSERT INTO flashcard_reviews (user_id, flashcard_id, quality, easiness_factor, interval_days, repetitions, next_review)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    Number(userId),
-    Number(flashcardId),
-    quality,
-    result.easinessFactor,
-    result.intervalDays,
-    result.repetitions,
-    result.nextReview
-  );
+  if (upsertError) {
+    return NextResponse.json(
+      { error: "Failed to save review progress" },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({
-    ...result,
+    easinessFactor: result.easinessFactor,
+    intervalDays: result.intervalDays,
+    repetitions: result.repetitions,
+    nextReview: result.nextReview,
     message: `Next review: ${result.nextReview} (${result.intervalDays} days)`,
   });
 }
